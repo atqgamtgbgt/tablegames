@@ -266,38 +266,111 @@ button { font: inherit; color: inherit; }
 .toggle input { accent-color: var(--tone); width: 1.05rem; height: 1.05rem; }
 
 /* ── 4人打ちの卓 ──────────────────────────────────────── */
-.mjinfo {
-  display: flex; gap: .9rem; flex-wrap: wrap; align-items: baseline;
-  font-size: .82rem; color: var(--sumi-soft);
-  border-bottom: 1px solid var(--paper-2); padding-bottom: .5rem; margin-bottom: .7rem;
-}
-.mjinfo__k { font-family: var(--mincho); font-size: 1rem; color: var(--sumi); }
-.mjinfo__dora b { color: var(--mahjong); font-family: var(--mincho); font-size: 1rem; }
+/* 上＝対面、左＝上家、右＝下家、下＝自分。河が中央を囲む本来の並び。
+   左右の河は回転させる。牌の大きさから卓の寸法を全部導いている。 */
+.mjtable {
+  --rt: clamp(12px, 4.1vw, 20px);        /* 河の牌の幅 */
+  --rth: calc(var(--rt) * 1.36);
+  --riv-w: calc(var(--rt) * 6 + 5px);    /* 河の横幅（6列） */
+  --riv-h: calc(var(--rth) * 3 + 3px);   /* 河の高さ（3段） */
+  --mid: calc(var(--riv-w) + 14px);
 
-.mjfoes { display: grid; gap: .45rem; margin-bottom: .9rem; }
-.mjfoe { border: 1px solid var(--paper-2); border-radius: var(--r-sm); padding: .45rem .6rem; background: #fff; }
-.mjfoe[data-riichi] { border-color: var(--shu); }
-.mjfoe__head { display: flex; gap: .6rem; align-items: baseline; font-size: .8rem; color: var(--sumi-soft); }
-.mjfoe__head b { font-family: var(--mincho); font-size: .95rem; color: var(--sumi); }
-.mjfoe__r { color: var(--shu); font-weight: 700; }
-.mjfoe__river, .mjriver { display: flex; flex-wrap: wrap; gap: 2px; margin-top: .3rem; }
-.mjriver { min-height: 1.6rem; }
-.mjt {
-  font-size: .72rem; line-height: 1.5; padding: 0 .22rem; border-radius: 2px;
-  background: var(--paper-2); color: var(--sumi); font-family: var(--mincho);
+  display: grid;
+  grid-template-columns: var(--riv-h) var(--mid) var(--riv-h);
+  grid-template-rows: var(--riv-h) var(--mid) var(--riv-h);
+  justify-content: center; align-content: center;
+  gap: calc(var(--rt) * 0.5);
+  margin: 0 auto;
+  padding: calc(var(--rt) * 0.9);
+  background: radial-gradient(circle at 50% 45%, #3c8a68 0%, #266a4d 70%, #1d5540 100%);
+  border: 3px solid #14392c;
+  border-radius: 8px;
+  box-shadow: inset 0 0 26px rgba(0, 0, 0, .35);
 }
-.mjt--r { background: var(--shu); color: #fff; }
-.mjt--dim { opacity: .35; }
+.mjseat { position: relative; display: grid; }
+.mjseat--across { grid-area: 1 / 2; align-content: end; justify-items: center; }
+.mjseat--me     { grid-area: 3 / 2; align-content: start; justify-items: center; }
+.mjseat--left   { grid-area: 2 / 1; justify-content: end; align-items: center; }
+.mjseat--right  { grid-area: 2 / 3; justify-content: start; align-items: center; }
 
-.mjme {
-  display: flex; gap: .6rem; align-items: baseline; flex-wrap: wrap;
-  font-size: .8rem; color: var(--sumi-soft);
-  border-top: 1px solid var(--paper-2); margin-top: .9rem; padding-top: .6rem;
+/* 河。左右の席は回して縦に並べる */
+.mjrwrap { display: grid; place-items: center; }
+.mjseat--across .mjrwrap, .mjseat--me .mjrwrap { width: var(--riv-w); height: var(--riv-h); }
+.mjseat--left .mjrwrap, .mjseat--right .mjrwrap { width: var(--riv-h); height: var(--riv-w); }
+.mjr {
+  display: grid; grid-template-columns: repeat(6, var(--rt));
+  gap: 1px; align-content: start; width: var(--riv-w);
 }
-.mjme b { font-family: var(--mincho); font-size: .95rem; color: var(--sumi); }
+.mjseat--across .mjr { transform: rotate(180deg); }
+.mjseat--left .mjr   { transform: rotate(90deg); }
+.mjseat--right .mjr  { transform: rotate(-90deg); }
 
-/* 14枚が1行に収まるようにする。折り返すと手牌が読みにくい */
-.mjhand { margin: .5rem 0 .3rem; }
+.tile--mini {
+  width: var(--rt); height: var(--rth); border-width: 1px; border-bottom-width: 2px;
+  border-radius: 2px; padding: 0; cursor: default; display: block;
+}
+.tile--mini.is-riichi { transform: rotate(90deg); border-color: var(--shu); }
+.tile--mini.is-called { opacity: .35; }
+
+/* 相手の手牌は裏向きで枚数だけ見せる。
+   枚数が変わっても席の枠からはみ出さないよう、1枚ずつの幅を可変にする。
+   固定幅にすると13枚が枠を超えて、河を押し出してしまう。 */
+.mjbacks { display: flex; gap: 1px; justify-content: center; overflow: hidden; }
+.mjbacks i {
+  display: block; flex: 1 1 0; min-width: 0;
+  height: calc(var(--rth) * .55);
+  background: linear-gradient(#3f7a5f, #2a5844); border: 1px solid #1c4031; border-radius: 2px;
+}
+.mjseat--across .mjbacks { width: var(--riv-w); }
+.mjseat--left .mjbacks, .mjseat--right .mjbacks {
+  flex-direction: column; height: var(--riv-w); width: calc(var(--rth) * .55);
+}
+.mjseat--left .mjbacks i, .mjseat--right .mjbacks i {
+  width: 100%; height: auto; flex: 1 1 0; min-height: 0;
+}
+/* 左右の席は、裏牌と河を横並びにする（縦に積むと枠を超える） */
+.mjseat--left, .mjseat--right { grid-auto-flow: column; align-items: center; gap: 2px; }
+.mjseat--right .mjbacks { order: 3; }
+.mjseat--across, .mjseat--me { grid-auto-flow: row; gap: 2px; }
+.mjseat--me .mjbacks { display: none; }
+
+.mjmelds { display: flex; gap: 3px; justify-content: center; flex-wrap: wrap; }
+.mjmeld { display: flex; gap: 1px; }
+
+/* 中央の卓面 */
+.mjcenter {
+  grid-area: 2 / 2; position: relative;
+  display: grid; place-items: center;
+  background: rgba(0, 0, 0, .18); border-radius: 4px;
+  color: #eef5f1; font-size: calc(var(--rt) * .62);
+}
+.mjc__s {
+  position: absolute; display: flex; gap: .25em; align-items: baseline;
+  padding: .1em .3em; border-radius: 3px; white-space: nowrap;
+}
+.mjc__s b { font-family: var(--mincho); font-size: 1.25em; }
+.mjc__s.is-turn { background: rgba(255, 255, 255, .22); }
+.mjc__s--me     { bottom: 2px; left: 50%; transform: translateX(-50%); }
+.mjc__s--across { top: 2px; left: 50%; transform: translateX(-50%); }
+.mjc__s--left   { left: 2px; top: 50%; transform: translateY(-50%) rotate(-90deg); transform-origin: left center; }
+.mjc__s--right  { right: 2px; top: 50%; transform: translateY(-50%) rotate(90deg); transform-origin: right center; }
+.mjstick {
+  display: inline-block; width: 1.6em; height: .34em; background: #f4f1e8;
+  border-radius: 2px; position: relative; align-self: center;
+}
+.mjstick::after {
+  content: ''; position: absolute; left: 50%; top: 50%;
+  width: .3em; height: .3em; background: var(--shu); border-radius: 50%;
+  transform: translate(-50%, -50%);
+}
+.mjc__mid { text-align: center; line-height: 1.45; }
+.mjc__k { font-family: var(--mincho); font-size: 1.35em; }
+.mjc__dora { margin: .25em 0; }
+.mjc__dora .tile--mini { display: inline-block; }
+.mjc__w { opacity: .75; }
+
+/* 自分の手牌。14枚が1行に収まるようにする */
+.mjhand { margin: .9rem 0 .3rem; }
 .mjhand .tiles { flex-wrap: nowrap; gap: 1.5px; }
 .mjhand .tile { flex: 1 1 0; min-width: 0; width: auto; height: auto; aspect-ratio: 41 / 56; max-width: 2.7rem; }
 .tile--drawn { margin-left: .5rem; }
@@ -4046,11 +4119,27 @@ const NS_PLAY4 = (() => {
 
     ctx.prompt(s.prompt || 'あなたは東家（下）です。1局打ってみましょう。');
 
-    // ── 画面の骨組み
-    const info = el('div', 'mjinfo');
-    const foes = el('div', 'mjfoes');
-    const river = el('div', 'mjriver');
-    const mine = el('div', 'mjme');
+    // ── 画面の骨組み：麻雀卓の形にする
+    //   上＝対面、左＝上家、右＝下家、下＝自分。河が四方を囲む。
+    const table = el('div', 'mjtable');
+    const seatBox = {};
+    const SEATS = [
+      { p: 0, cls: 'me' }, { p: 1, cls: 'right' }, { p: 2, cls: 'across' }, { p: 3, cls: 'left' },
+    ];
+    for (const seat of SEATS) {
+      const box = el('div', `mjseat mjseat--${seat.cls}`);
+      const backs = el('div', 'mjbacks');
+      const melds = el('div', 'mjmelds');
+      const wrap = el('div', 'mjrwrap');
+      const riv = el('div', 'mjr');
+      wrap.appendChild(riv);
+      box.append(backs, melds, wrap);
+      seatBox[seat.p] = { box, riv, backs, melds, cls: seat.cls };
+      table.appendChild(box);
+    }
+    const center = el('div', 'mjcenter');
+    table.appendChild(center);
+
     const handWrap = el('div', 'mjhand');
     const status = el('p', 'note');
     const coachBox = el('div', 'coach');
@@ -4060,7 +4149,7 @@ const NS_PLAY4 = (() => {
     const dtoggle = el('label', 'toggle');
     dtoggle.innerHTML = `<input type="checkbox" ${showDanger ? 'checked' : ''}> 危険度を牌に表示`;
     bar.append(toggle, dtoggle);
-    ctx.mount.append(info, foes, el('p', 'note', 'あなたの捨て牌'), river, mine, handWrap, status, bar, coachBox);
+    ctx.mount.append(table, handWrap, status, bar, coachBox);
 
     dtoggle.querySelector('input').addEventListener('change', (e) => { showDanger = e.target.checked; paint(); });
     toggle.querySelector('input').addEventListener('change', (e) => { if (!e.target.checked) coachBox.innerHTML = ''; });
@@ -4080,37 +4169,37 @@ const NS_PLAY4 = (() => {
     };
 
     // ── 描画
-    function paintInfo() {
+    function paintCenter() {
       const dora = game.doraTile();
-      info.innerHTML = `
-        <span class="mjinfo__k">${game.kyokuLabel()}</span>
-        <span>残り ${game.wall.length}</span>
-        <span class="mjinfo__dora">ドラ <b>${dora ? M.tileName(dora) : '—'}</b></span>
-        ${game.riichiSticks ? `<span>供託 ${game.riichiSticks}本</span>` : ''}`;
+      const seatCell = (p) => {
+        const cls = p === ME ? 'me' : p === 1 ? 'right' : p === 2 ? 'across' : 'left';
+        return `<div class="mjc__s mjc__s--${cls} ${game.turn === p && game.phase !== 'end' ? 'is-turn' : ''}">
+          <b>${game.seatJa(p)}</b><span>${game.scores[p].toLocaleString()}</span>
+          ${game.riichi[p] ? '<i class="mjstick"></i>' : ''}
+        </div>`;
+      };
+      center.innerHTML = `
+        ${[0, 1, 2, 3].map(seatCell).join('')}
+        <div class="mjc__mid">
+          <div class="mjc__k">${game.kyokuLabel()}</div>
+          <div class="mjc__dora">${dora ? `<span class="tile tile--mini">${tileFace(game.dora)}</span>` : ''}</div>
+          <div class="mjc__w">残 ${game.wall.length}${game.riichiSticks ? ` / 供託${game.riichiSticks}` : ''}</div>
+        </div>`;
     }
 
-    function paintFoes() {
-      foes.innerHTML = '';
-      for (let p = 1; p < 4; p++) {
-        const row = el('div', 'mjfoe');
-        if (game.riichi[p]) row.dataset.riichi = '1';
-        const head = el('div', 'mjfoe__head', `
-          <b>${game.seatJa(p)}家</b>
-          <span>${game.scores[p].toLocaleString()}点</span>
-          ${game.riichi[p] ? '<span class="mjfoe__r">リーチ</span>' : ''}
-          ${game.melds[p].length ? `<span>鳴き${game.melds[p].length}</span>` : ''}`);
-        const ds = el('div', 'mjfoe__river');
-        ds.innerHTML = game.discards[p].map((d) =>
-          `<span class="mjt ${d.riichi ? 'mjt--r' : ''} ${d.called ? 'mjt--dim' : ''}">${M.tileName(d.tile)}</span>`).join('');
-        row.append(head, ds);
-        foes.appendChild(row);
+    function paintSeat(p) {
+      const b = seatBox[p];
+      b.box.dataset.riichi = game.riichi[p] ? '1' : '';
+      b.box.dataset.turn = (game.turn === p && game.phase !== 'end') ? '1' : '';
+      // 相手の手牌は裏向きで枚数だけ見せる
+      if (p === ME) { b.backs.innerHTML = ''; } else {
+        const n = game.hands[p].length + (game.turn === p && game.drawn ? 1 : 0);
+        b.backs.innerHTML = Array.from({ length: n }, () => '<i></i>').join('');
       }
-    }
-
-    function paintRiver() {
-      river.innerHTML = game.discards[ME].map((d) =>
-        `<span class="mjt ${d.riichi ? 'mjt--r' : ''}">${M.tileName(d.tile)}</span>`).join('')
-        || '<span class="note">まだありません</span>';
+      b.melds.innerHTML = game.melds[p].map((m) =>
+        `<span class="mjmeld">${m.tiles.map((t) => `<span class="tile tile--mini">${tileFace(t)}</span>`).join('')}</span>`).join('');
+      b.riv.innerHTML = game.discards[p].map((d) =>
+        `<span class="tile tile--mini ${d.riichi ? 'is-riichi' : ''} ${d.called ? 'is-called' : ''}">${tileFace(d.tile)}</span>`).join('');
     }
 
     function paintHand() {
@@ -4121,7 +4210,7 @@ const NS_PLAY4 = (() => {
       const states = {};
       if (showDanger && threats.length) {
         tiles.forEach((t, i) => {
-          const d = Math.max(...threats.map((p) => danger(game, t, p)));
+          const d = Math.max(...threats.map((q) => danger(game, t, q)));
           states[i] = d === 0 ? 'safe' : d >= 9 ? 'risk' : d >= 6 ? 'warn' : 'mid';
         });
       }
@@ -4139,13 +4228,7 @@ const NS_PLAY4 = (() => {
       }
     }
 
-    function paintMe() {
-      mine.innerHTML = `<b>あなた（${game.seatJa(ME)}家${game.isOya(ME) ? '・親' : ''}）</b>
-        <span>${game.scores[ME].toLocaleString()}点</span>
-        ${game.riichi[ME] ? '<span class="mjfoe__r">リーチ中</span>' : ''}
-        ${game.melds[ME].length ? `<span>鳴き ${game.melds[ME].map((m) => m.tiles.map(M.tileName).join('')).join(' / ')}</span>` : ''}`;
-    }
-    const paint = () => { paintInfo(); paintFoes(); paintRiver(); paintMe(); paintHand(); };
+    const paint = () => { paintCenter(); [0, 1, 2, 3].forEach(paintSeat); paintHand(); };
 
     // ── 進行
     async function loop() {
@@ -4203,8 +4286,12 @@ const NS_PLAY4 = (() => {
       acts.push({ label: 'やり直す', variant: 'ghost', onClick: restart });
       ctx.actions(acts);
 
-      // 押し引きの助言は、切る「前」に出すのが要点
-      if (coachOn()) showCoach(foldAdvice(game, ME));
+      // 押し引きの助言は、切る「前」に出すのが要点。
+      // 助言が無い場面では、直前の講評を残す（消すと読む間もなく消える）
+      if (coachOn()) {
+        const adv = foldAdvice(game, ME);
+        if (adv) showCoach(adv);
+      }
       const threats = riichiPlayers(game, ME);
       tell(threats.length
         ? `${threats.map((p) => game.seatJa(p) + '家').join('と')}がリーチ中。切る牌を選んでください。`
@@ -5271,7 +5358,7 @@ const NS_DCHESS = (() => {
                 board: { position: { d4: 'R' }, marks: { d4: 'sel' } },
                 choices: [{ t: 'd4' }, { t: '4d', why: '先にファイル（アルファベット）、あとにランク（数字）です。' },
                   { t: 'e4', why: '左から4番目の列は d です。' }, { t: 'd5', why: '手前から4番目の段です。' }],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: 'ファイル（a〜h）→ ランク（1〜8）の順で読みます。',
               },
               {
@@ -5338,7 +5425,7 @@ const NS_DCHESS = (() => {
                   { t: '行ける' },
                   { t: '行けない', why: 'a1もh8も同じ黒マスです。斜め一直線でつながっています。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: 'a1とh8はどちらも同じ色のマス。同じ色なら、じゃまがなければ必ず行けます。',
               },
               {
@@ -5371,7 +5458,7 @@ const NS_DCHESS = (() => {
                   { t: '白いマス（d1）' },
                   { t: '黒いマス（e1）', why: 'そこはキングの位置です。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: '「クイーンは自分の色の上に乗る」と覚えます。白のクイーンは白マスのd1、黒のクイーンは黒マスのd8です。',
               },
             ],
@@ -5461,7 +5548,7 @@ const NS_DCHESS = (() => {
                   { t: 'そのまま止まる', why: 'ポーンは後ろに戻れないので、それでは動けない駒になってしまいます。' },
                   { t: '盤から取り除かれる', why: 'もったいない。むしろご褒美があります。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: 'これを<strong>プロモーション（昇格）</strong>といいます。ほぼ全員クイーンを選びます。いちばん弱い駒がいちばん強い駒になる、チェスで一番痛快な瞬間です。',
               },
               {
@@ -5491,7 +5578,7 @@ const NS_DCHESS = (() => {
                   { t: '2点ぶん得', why: 'ルーク5、ビショップ3。渡した方が重いので損です。' },
                   { t: '互角', why: 'ルークとビショップは同じ重さではありません。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: '5を渡して3をもらったので、2点の損。これを「クオリティを損した」といいます。',
               },
               {
@@ -5501,7 +5588,7 @@ const NS_DCHESS = (() => {
                   { t: '大きく得', why: '3＋3＝6 と 5＋1＝6。ほぼ同じです。' },
                   { t: '大きく損', why: '3＋3＝6 と 5＋1＝6。ほぼ同じです。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: '6対6でほぼ互角。こういう計算がその場でできると、交換に迷わなくなります。',
               },
             ],
@@ -5538,7 +5625,7 @@ const NS_DCHESS = (() => {
                   { t: '王手している駒を取る', why: 'これも正しい対処です。' },
                   { t: '間に駒を割り込ませる', why: 'これも正しい対処です（ナイトの王手には使えませんが）。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: 'チェックの無視は反則です。チェックを解消する手だけが指せます。',
               },
             ],
@@ -5598,7 +5685,7 @@ const NS_DCHESS = (() => {
                   { t: 'チェックメイトで白の勝ち', why: '黒のキングはチェックされていません。クイーンはa8を攻撃していないので。' },
                   { t: '黒はまだ動ける', why: 'a7・b7・b8はすべて白に押さえられていて、黒はキングしかいません。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: 'クイーンが c7 ではなく c6 にいれば、次の手で詰ませられました。1マスの差で勝ちが消えます。',
               },
             ],
@@ -5667,7 +5754,7 @@ const NS_DCHESS = (() => {
                   { t: 'ルークが攻撃されている', why: 'ルークが狙われていてもキャスリングはできます。制限がかかるのはキング側だけです。' },
                   { t: '相手のクイーンが盤に残っている', why: '相手の駒の有無は関係ありません。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: 'チェック中はできません。また、キングが通るマスが攻撃されていてもできません。ルークの側には制限がないのがポイントです。',
               },
             ],
@@ -5715,7 +5802,7 @@ const NS_DCHESS = (() => {
                   { t: '序盤の定跡を知らない', why: '初心者同士では、定跡の差が出る前に駒の取り合いで勝負がつきます。' },
                   { t: '終盤の詰み手順を知らない', why: '大事ですが、その前に駒を失って負けていることの方が多いです。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: '駒の損得だけで勝敗の大半が決まります。だから「3つの問い」を毎回やる価値があります。',
               },
               {
@@ -5845,7 +5932,7 @@ const NS_DCHESS = (() => {
                   { t: 'ルールで禁止されているから', why: '禁止ではありません。何度動かしても構いません。' },
                   { t: '駒が疲れるから', why: 'チェスにそういう概念はありません。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: '序盤は「1手で1枚を働かせる」競争です。1枚を3回動かす間に、相手は3枚を働かせています。',
               },
               {
@@ -5855,7 +5942,7 @@ const NS_DCHESS = (() => {
                   { t: '相手のキングへの最短の攻め筋', why: '駒が足りないまま攻めても、たいてい跳ね返されます。' },
                   { t: '定跡どおりの手', why: '中盤に入ると定跡は役に立ちません。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: '「初期位置から一度も動いていない駒」がないか見てください。たいていそこに手があります。',
               },
               {
@@ -5898,7 +5985,7 @@ const NS_DCHESS = (() => {
                   { t: 'チェックは2回かけると勝ちだから', why: 'そういうルールはありません。' },
                   { t: 'キングは動けなくなるから', why: 'キングは逃げられます。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: 'チェック対応が強制されるので、どいた駒は好き放題できます。極端な話、どいた駒がタダで取られる場所へ行っても成立します。',
               },
             ],
@@ -5949,7 +6036,7 @@ const NS_DCHESS = (() => {
                   { t: 'キングは終盤だけ動きが速くなるから', why: 'ルールは変わりません。1マスのままです。' },
                   { t: '前に出ないと反則だから', why: 'そういうルールはありません。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: '大駒が消えれば、キングは安全です。隅に置いたままにするのは、駒を1枚捨てているのと同じです。',
               },
             ],
@@ -5998,7 +6085,7 @@ const NS_DCHESS = (() => {
                   { t: 'その駒の点数が自分の駒より高いか', why: '大事ですが、取り返されるかどうかの方が先です。' },
                   { t: '相手のキングがどこにいるか', why: '終盤では重要ですが、取るかどうかの判断とは別の話です。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: '「攻めの枚数 > 守りの枚数」なら取っていい。これが交換の基本の数え方です。',
               },
             ],
@@ -6068,7 +6155,7 @@ const NS_DSHOGI = (() => {
                   { t: '自分の駒', why: '自分の駒は先が向こう側を向きます。' },
                   { t: 'どちらでもない', why: '将棋の駒は必ずどちらかの持ち物です。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: '自分から見て、先がこちらを向いている＝相手の駒。この一点だけ押さえれば盤面が読めます。',
               },
             ],
@@ -6123,7 +6210,7 @@ const NS_DSHOGI = (() => {
                   { t: '真後ろ', why: '金は真後ろには下がれます。' },
                   { t: '真横', why: '金は左右に動けます。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: '後ろ斜めの2方向だけが不可。ここが次の「銀」との違いになります。',
               },
             ],
@@ -6154,7 +6241,7 @@ const NS_DSHOGI = (() => {
                   { t: '真横', why: '銀は真横に行けません。' },
                   { t: '後ろ斜め', why: '金は後ろ斜めに行けません。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: '前方の3方向は共通。だから金も銀も「前に強い駒」です。',
               },
             ],
@@ -6315,7 +6402,7 @@ const NS_DSHOGI = (() => {
                   { t: '歩と香', why: '歩は「と金」、香は「成香」になります。' },
                   { t: '角と飛車', why: '角は「馬」、飛車は「竜」になります。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: '金と玉だけは成りません。金は成った駒の到達点なので、それ以上先がないわけです。',
               },
             ],
@@ -6366,7 +6453,7 @@ const NS_DSHOGI = (() => {
                   { t: '打てる', why: '同じ筋に自分の歩が2枚並ぶのは二歩、反則です。' },
                   { t: '相手陣なら打てる', why: '場所は関係ありません。同じ筋にあるかどうかだけです。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: '二歩は将棋でいちばん多い反則です。歩を打つ前に、その筋を上から下まで一度目で追う癖をつけてください。',
               },
             ],
@@ -6485,7 +6572,7 @@ const NS_DSHOGI = (() => {
                   { t: '将棋の駒の方が価値が高いから', why: '駒の価値は相対的なもので、そういう問題ではありません。' },
                   { t: '駒の数がチェスより少ないから', why: '将棋は40枚、チェスは32枚。将棋の方が多いです。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: '1枚損すると、盤上で1枚減り、相手の戦力が1枚増える。差は2枚ぶん開きます。',
               },
             ],
@@ -6523,7 +6610,7 @@ const NS_DSHOGI = (() => {
                   { t: '左側（飛車のそば）', why: '飛車のまわりは必ず戦場になります。そこに玉がいると一緒に潰されます。' },
                   { t: '真ん中のまま', why: '中央は上下左右から攻められます。いちばん危ない場所です。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: '玉と飛車は引き離す。これが守れていれば、囲いの名前を知らなくても大きく崩れません。',
               },
               {
@@ -6533,7 +6620,7 @@ const NS_DSHOGI = (() => {
                   { t: '正しい手順どおりに組むこと', why: '手順は状況で変わります。丸暗記より形の意味です。' },
                   { t: '有名な囲いの名前を使うこと', why: '名前は結果につけられたものです。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: '金銀3枚が玉のそばにある。これさえ満たしていれば、多少形が崩れても実戦では十分戦えます。',
               },
             ],
@@ -6580,7 +6667,7 @@ const NS_DSHOGI = (() => {
                   { t: '飛車がいきなり成り込める場所', why: '大駒だけで攻めると、たいてい捕まって終わります。' },
                   { t: '玉を詰ませる手順', why: '駒が足りないうちは詰みません。まず攻めの足場を作ります。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: '攻めは歩から。大駒は歩で道を作ってから使います。「歩のない攻めは切れる」と言われるくらいです。',
               },
             ],
@@ -6607,7 +6694,7 @@ const NS_DSHOGI = (() => {
                   { t: '飛車は大事なので温存する', why: '詰ませれば勝ちです。持っている駒に意味はなくなります。' },
                   { t: '相手の出方を見る', why: 'その1手で相手に詰まされます。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: '終盤に駒の価値はありません。「1手早いか」だけが価値です。',
               },
               {
@@ -6662,7 +6749,7 @@ const NS_DSHOGI = (() => {
                   { t: '3種類の駒を使えということ', why: '種類ではなく枚数の話です。同じ歩が2枚でも構いません。' },
                   { t: '3手以内に攻めろということ', why: '手数の話ではありません。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: '守りが2枚なら、攻めは3枚ないと破れません。逆に3枚集まれば、たいていの守りは崩れます。',
               },
               {
@@ -6720,7 +6807,7 @@ const NS_DSHOGI = (() => {
                   { t: '歩', why: '歩は打っても詰ませにくい駒です。打ち歩詰めも禁止されています。' },
                   { t: '香車', why: '真っ直ぐしか進まないので、玉を追い詰めるには使いにくい駒です。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: '金と銀は玉のそばに打ちやすく、詰ませる力が強い駒です。終盤で渡すと寄せられます。',
               },
               {
@@ -6826,7 +6913,7 @@ const NS_DMAHJONG = (() => {
                   { t: '同じ牌3枚（刻子）', why: '字牌でも同じ牌を3枚そろえる形は作れます。' },
                   { t: '同じ牌2枚（雀頭）', why: '2枚そろえる形も作れます。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: '字牌に順番はないので、連番は作れません。同じ牌をそろえる形だけです。',
               },
             ],
@@ -6857,7 +6944,7 @@ const NS_DMAHJONG = (() => {
                   { t: '8索・9索・1索', why: '9の次に1は来ません。9で終わりです。' },
                   { t: '東・南・西', why: '字牌に順番はないので、連番になりません。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: '同じ種類の連番か、まったく同じ牌3枚。この2つだけです。',
               },
               {
@@ -6897,7 +6984,7 @@ const NS_DMAHJONG = (() => {
                 choices: [
                   { t: '2枚' }, { t: '3枚', why: '3枚は面子です。' }, { t: '1枚', why: '1枚では組になりません。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: '同じ牌2枚。手牌の中でただ1つだけ、3枚でない組が許される場所です。',
               },
             ],
@@ -6963,7 +7050,7 @@ const NS_DMAHJONG = (() => {
                   { t: '字牌の対子が混ざっている', why: '字牌でも問題ありません。' },
                   { t: '種類がバラバラ', why: 'バラバラでかまいません。むしろそれが七対子の使いどころです。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: '4枚使いは2組と数えません。7種類すべて違う牌でそろえる必要があります。',
               },
             ],
@@ -7019,7 +7106,7 @@ const NS_DMAHJONG = (() => {
                   { t: '5萬だけ', why: '2萬でも 2・3・4 の順子になります。' },
                   { t: '3萬と4萬', why: 'それは同じ牌をそろえる形（刻子）の話です。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: 'これが両面。両側から受けられるので、待ち牌は最大8枚（2萬4枚＋5萬4枚）になります。',
               },
             ],
@@ -7052,7 +7139,7 @@ const NS_DMAHJONG = (() => {
                   { t: '点数が半分になる', why: '点が減るのではなく、そもそもあがれません。' },
                   { t: '問題なくあがれる', why: '形と役の両方が必要です。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: 'これを「役なし」といいます。だから多くの人はとりあえずリーチをかけます。リーチ自体が役になるからです。',
               },
             ],
@@ -7102,7 +7189,7 @@ const NS_DMAHJONG = (() => {
                   { t: '待ちが1種類しかない手', why: '待ちの広さは関係ありません。' },
                   { t: '役が1つもついていない手', why: 'むしろそれがリーチの使いどころです。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: 'リーチは「鳴いていない（門前）」であることが条件です。鳴いた手ではかけられません。',
               },
             ],
@@ -7154,7 +7241,7 @@ const NS_DMAHJONG = (() => {
                   { t: '点数が高くなるから', why: '牌そのものに点数の差はありません。' },
                   { t: '相手が使いにくい牌だから', why: 'むしろ中央の牌はみんなが欲しがります。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: '5萬なら 34・46・67 と、面子になる道が何通りもあります。1萬は 23 と組む道しかありません。',
               },
               {
@@ -7217,7 +7304,7 @@ const NS_DMAHJONG = (() => {
                   { t: '切る。役がないとあがれないから', why: 'リーチがあります。テンパイさえすれば役はつきます。' },
                   { t: '相手の捨て牌を見て決める', why: '守りの話はもっと後の段階です。まず自分の手を進めます。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: '遠回りして高い手を作るより、まっすぐ進めてリーチ。初心者のうちはこれが一番勝てます。',
               },
               {
@@ -7237,7 +7324,7 @@ const NS_DMAHJONG = (() => {
                   { t: '字牌', why: '字牌でも待たれていることはあります。安全そうに見えるだけです。' },
                   { t: '1と9', why: '端の牌も普通に当たります。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: '自分の捨てた牌ではロンできない（フリテン）ため、100%安全です。迷ったらここから探します。',
               },
             ],
@@ -7276,7 +7363,7 @@ const NS_DMAHJONG = (() => {
                   { t: '4筒5筒（両面）', why: '両面はいちばん強い形です。最後まで残します。' },
                   { t: '3萬5萬（嵌張）', why: '辺張よりは強いので、外すのは辺張の後です。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: '89は7しか受けられません。34なら2と5の2種類。受けられる種類の数で比べます。',
               },
               { type: 'discard', sets: 4 },
@@ -7317,7 +7404,7 @@ const NS_DMAHJONG = (() => {
                   { t: 'そのまま黙ってあがる', why: '役がないとあがれません。形がそろっていても和了できないのです。' },
                   { t: '手を崩して役を作りにいく', why: 'テンパイを崩すのは大きな損です。リーチが役になります。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: 'これがリーチのいちばんの使いどころです。役のない手を、宣言するだけであがれる手に変えられます。',
               },
               { type: 'waits', sets: 4, prompt: 'テンパイしました。アガリ牌を全部選んでください。' },
@@ -7361,7 +7448,7 @@ const NS_DMAHJONG = (() => {
                   { t: 'まったくあがれない', why: 'ロンができないだけで、ツモは有効です。' },
                   { t: 'リーチをかければあがれる', why: 'リーチをかけてもフリテンは解消されません。むしろ手を変えられなくなります。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: 'フリテンで禁じられるのはロン（他人の牌であがること）だけ。自分でツモればあがれます。',
               },
               {
@@ -7427,7 +7514,7 @@ const NS_DMAHJONG = (() => {
                   { t: '9筒', why: '表示牌そのものではありません。次の牌です。' },
                   { t: '8筒', why: '1つ戻るのではなく、1つ進みます。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: '9の次は1に戻ります。字牌も同じで、北の次は東、中の次は白です。',
               },
               {
@@ -7436,7 +7523,7 @@ const NS_DMAHJONG = (() => {
                   { t: '1人' }, { t: '2人', why: '同時にロンできるルールもありますが、基本は1人です。' },
                   { t: '全員', why: 'そうであれば麻雀はずっと楽なゲームです。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: 'だから「あがれない3回」をどう安く済ませるかが、勝敗を分けます。',
               },
             ],
@@ -7474,7 +7561,7 @@ const NS_DMAHJONG = (() => {
                   { t: '3枚見えている字牌', why: '安全度は高いですが、単騎待ちの可能性が残ります。100%ではありません。' },
                   { t: '自分がさっき切った牌', why: '自分の捨て牌は関係ありません。相手の捨て牌を見ます。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: 'フリテンのルールにより、リーチした人の捨て牌は100%当たりません。降りるときはまずここから探します。',
               },
               {
@@ -7484,7 +7571,7 @@ const NS_DMAHJONG = (() => {
                   { t: '降りる', why: 'テンパイを崩して降りるのは、あがる権利を捨てるだけです。' },
                   { t: '手を組み替える', why: 'テンパイからの組み替えは大きな損です。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: '「リーチが来たら降りる」は、手が遠いときの話です。テンパイしているなら堂々と押します。',
               },
             ],
@@ -7549,7 +7636,7 @@ const NS_DMAHJONG = (() => {
                   { t: 'かけられる', why: 'リーチは門前（鳴いていないこと）が条件です。' },
                   { t: '1回だけ鳴いていればかけられる', why: '1回でも鳴いたらかけられません。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: 'ここが鳴きの最大の代償です。だから「鳴いても残る役」があるときだけ鳴きます。',
               },
               {
@@ -7559,7 +7646,7 @@ const NS_DMAHJONG = (() => {
                   { t: '見送る', why: '役牌の3枚目は、鳴いた瞬間に役が確定する数少ない好機です。' },
                   { t: 'リーチを狙って我慢する', why: '中を3枚ツモで集める方がずっと遠回りです。' },
                 ],
-                answer: 0, keepOrder: true,
+                answer: 0,
                 why: '役牌のポンは、鳴きが確実に得になる代表例です。迷わず鳴いて構いません。',
               },
               {
