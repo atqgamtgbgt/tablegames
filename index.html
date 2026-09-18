@@ -98,6 +98,7 @@ button { font: inherit; color: inherit; }
 
 .game {
   position: relative; display: block; overflow: hidden;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, .22);
   background: var(--ink-2); border: 1px solid var(--line);
   border-radius: var(--r-md); padding: 1.3rem 1.2rem 1.2rem;
   text-align: left; width: 100%; cursor: pointer;
@@ -145,8 +146,10 @@ button { font: inherit; color: inherit; }
 
 /* ── レッスン本体 ─────────────────────────────────────── */
 .stage {
-  background: var(--paper); color: var(--sumi);
+  background: linear-gradient(170deg, #e9e5da, var(--paper) 40%);
+  color: var(--sumi);
   border-radius: var(--r-md); padding: 1.4rem 1.2rem 1.5rem; margin-top: 1rem;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .28);
 }
 @media (min-width: 42rem) { .stage { padding: 2rem 2.2rem 2.2rem; } }
 .stage h2 { font-size: 1.45rem; margin: 0 0 .7rem; color: var(--sumi); }
@@ -169,8 +172,10 @@ button { font: inherit; color: inherit; }
 .choice {
   background: #fff; border: 1px solid var(--paper-2); border-radius: var(--r-sm);
   padding: .75rem .9rem; text-align: left; cursor: pointer; color: var(--sumi);
-  transition: border-color .15s, background .15s;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .06);
+  transition: border-color .15s, background .15s, transform .12s, box-shadow .15s;
 }
+.choice:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 3px 8px rgba(0,0,0,.1); }
 .choice:hover:not(:disabled) { border-color: var(--tone); }
 .choice[data-s="ok"] { border-color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, #fff); }
 .choice[data-s="ng"] { border-color: var(--ng); background: color-mix(in srgb, var(--ng) 12%, #fff); }
@@ -179,7 +184,10 @@ button { font: inherit; color: inherit; }
 .feedback {
   margin-top: 1rem; padding: .85rem 1rem; border-radius: var(--r-sm);
   border-left: 3px solid var(--sumi-soft); background: #fff; font-size: .92rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .08);
+  animation: fadeUp .22s ease-out;
 }
+@keyframes fadeUp { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
 .feedback[data-s="ok"] { border-left-color: var(--ok); }
 .feedback[data-s="ng"] { border-left-color: var(--ng); }
 .feedback b { font-family: var(--mincho); display: block; margin-bottom: .2rem; }
@@ -199,7 +207,10 @@ button { font: inherit; color: inherit; }
 
 /* ── 盤 ──────────────────────────────────────────────── */
 .boardwrap { display: grid; justify-items: center; gap: .6rem; margin: 0 auto; }
-.board { width: min(100%, 26rem); height: auto; touch-action: manipulation; user-select: none; }
+.board {
+  width: min(100%, 26rem); height: auto; touch-action: manipulation; user-select: none;
+  filter: drop-shadow(0 3px 6px rgba(20, 26, 34, .3));
+}
 .board .sq { cursor: pointer; }
 .board .sq[data-pick] { cursor: default; }
 .hand {
@@ -220,20 +231,31 @@ button { font: inherit; color: inherit; }
 .tiles--tight { gap: .12rem; }
 .tile {
   width: 2.7rem; height: 3.6rem; flex: 0 0 auto; padding: 0;
-  background: linear-gradient(#fffdf6, #f0e9d6);
+  background: linear-gradient(160deg, #fffefa 0%, #fbf6e9 45%, #ece3cd 100%);
   border: 1px solid #b6ac90; border-bottom-width: 3px; border-radius: 4px;
-  cursor: pointer; display: grid; place-items: center;
-  transition: transform .12s, border-color .12s;
+  cursor: pointer; display: grid; place-items: center; position: relative;
+  box-shadow: 0 1px 0 rgba(255,255,255,.9) inset, 0 2px 4px rgba(20,26,34,.22);
+  transition: transform .12s, border-color .12s, box-shadow .12s;
+}
+/* 牌の面のふち。わずかな段差で象牙の厚みに見せる */
+.tile::after {
+  content: ''; position: absolute; inset: 1px 1px 2px;
+  border-radius: 3px; pointer-events: none;
+  box-shadow: 0 0 0 .5px rgba(150,140,115,.35) inset;
 }
 @media (max-width: 30rem) { .tile { width: 2.05rem; height: 2.75rem; } }
-.tile:hover:not(:disabled) { transform: translateY(-3px); }
+.tile:hover:not(:disabled) { transform: translateY(-4px); box-shadow: 0 1px 0 rgba(255,255,255,.9) inset, 0 7px 10px rgba(20,26,34,.3); }
 .tile[data-s="on"]  { border-color: var(--shu); transform: translateY(-7px); }
 .tile[data-s="ok"]  { border-color: var(--ok); box-shadow: 0 0 0 2px color-mix(in srgb, var(--ok) 45%, transparent); }
 .tile[data-s="ng"]  { border-color: var(--ng); box-shadow: 0 0 0 2px color-mix(in srgb, var(--ng) 45%, transparent); }
 .tile[data-s="dim"] { opacity: .32; }
 .tile:disabled { cursor: default; }
 .tile svg { width: 100%; height: 100%; display: block; }
-.tile--back { background: linear-gradient(#3f7a5f, #2d5c47); border-color: #1f4231; }
+.tile--back {
+  background: linear-gradient(150deg, #4a8a6c, #2d5c47 60%, #24503c);
+  border-color: #1f4231;
+}
+.tile--back::after { box-shadow: 0 0 0 1px rgba(255,255,255,.12) inset; }
 
 .meldbox {
   display: flex; gap: .5rem; flex-wrap: wrap; justify-content: center;
@@ -282,10 +304,15 @@ button { font: inherit; color: inherit; }
   gap: calc(var(--rt) * 0.5);
   margin: 0 auto;
   padding: calc(var(--rt) * 0.9);
-  background: radial-gradient(circle at 50% 45%, #3c8a68 0%, #266a4d 70%, #1d5540 100%);
-  border: 3px solid #14392c;
-  border-radius: 8px;
-  box-shadow: inset 0 0 26px rgba(0, 0, 0, .35);
+  background:
+    repeating-linear-gradient(48deg, rgba(255,255,255,.028) 0 2px, transparent 2px 4px),
+    radial-gradient(circle at 50% 42%, #3f9070 0%, #2a7052 62%, #1c5540 100%);
+  border: 6px solid;
+  border-image: linear-gradient(160deg, #6b4a2c, #3d2917 55%, #593a21) 1;
+  border-radius: 10px;
+  box-shadow:
+    inset 0 0 30px rgba(0, 0, 0, .38),
+    0 6px 18px rgba(0, 0, 0, .35);
 }
 .mjseat { position: relative; display: grid; }
 .mjseat--across { grid-area: 1 / 2; align-content: end; justify-items: center; }
@@ -306,8 +333,21 @@ button { font: inherit; color: inherit; }
 .mjseat--right .mjr  { transform: rotate(-90deg); }
 
 .tile--mini {
-  width: var(--rt); height: var(--rth); border-width: 1px; border-bottom-width: 2px;
+  width: var(--rt); height: var(--rth); border-width: .5px; border-bottom-width: 2px;
   border-radius: 2px; padding: 0; cursor: default; display: block;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .3);
+}
+.tile--mini::after { inset: 0; border-radius: 2px; }
+/* 置かれたばかりの牌は、ひと呼吸おいて現れる */
+.tile--mini.is-new { animation: placeTile .22s ease-out; }
+@keyframes placeTile {
+  from { transform: scale(.55) translateY(-6px); opacity: 0; }
+  to   { transform: none; opacity: 1; }
+}
+.tile--mini.is-riichi.is-new { animation: placeTileR .22s ease-out; }
+@keyframes placeTileR {
+  from { transform: rotate(90deg) scale(.55); opacity: 0; }
+  to   { transform: rotate(90deg); opacity: 1; }
 }
 .tile--mini.is-riichi { transform: rotate(90deg); border-color: var(--shu); }
 .tile--mini.is-called { opacity: .35; }
@@ -319,7 +359,9 @@ button { font: inherit; color: inherit; }
 .mjbacks i {
   display: block; flex: 1 1 0; min-width: 0;
   height: calc(var(--rth) * .55);
-  background: linear-gradient(#3f7a5f, #2a5844); border: 1px solid #1c4031; border-radius: 2px;
+  background: linear-gradient(150deg, #4a8a6c, #2a5844);
+  border: .5px solid #1c4031; border-radius: 2px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .28);
 }
 .mjseat--across .mjbacks { width: var(--riv-w); }
 .mjseat--left .mjbacks, .mjseat--right .mjbacks {
@@ -341,7 +383,10 @@ button { font: inherit; color: inherit; }
 .mjcenter {
   grid-area: 2 / 2; position: relative;
   display: grid; place-items: center;
-  background: rgba(0, 0, 0, .18); border-radius: 4px;
+  background: linear-gradient(#0f3728, #123f2e);
+  border: 1px solid rgba(255, 255, 255, .1);
+  border-radius: 5px;
+  box-shadow: inset 0 2px 10px rgba(0, 0, 0, .45);
   color: #eef5f1; font-size: calc(var(--rt) * .62);
 }
 .mjc__s {
@@ -349,7 +394,11 @@ button { font: inherit; color: inherit; }
   padding: .1em .3em; border-radius: 3px; white-space: nowrap;
 }
 .mjc__s b { font-family: var(--mincho); font-size: 1.25em; }
-.mjc__s.is-turn { background: rgba(255, 255, 255, .22); }
+.mjc__s.is-turn {
+  background: rgba(255, 248, 220, .26);
+  box-shadow: 0 0 0 1px rgba(255, 240, 200, .5);
+}
+.mjc__s.is-turn b { color: #ffe9a8; }
 .mjc__s--me     { bottom: 2px; left: 50%; transform: translateX(-50%); }
 .mjc__s--across { top: 2px; left: 50%; transform: translateX(-50%); }
 .mjc__s--left   { left: 2px; top: 50%; transform: translateY(-50%) rotate(-90deg); transform-origin: left center; }
@@ -364,7 +413,7 @@ button { font: inherit; color: inherit; }
   transform: translate(-50%, -50%);
 }
 .mjc__mid { text-align: center; line-height: 1.45; }
-.mjc__k { font-family: var(--mincho); font-size: 1.35em; }
+.mjc__k { font-family: var(--mincho); font-size: 1.4em; letter-spacing: .06em; }
 .mjc__dora { margin: .25em 0; }
 .mjc__dora .tile--mini { display: inline-block; }
 .mjc__w { opacity: .75; }
@@ -4198,8 +4247,11 @@ const NS_PLAY4 = (() => {
       }
       b.melds.innerHTML = game.melds[p].map((m) =>
         `<span class="mjmeld">${m.tiles.map((t) => `<span class="tile tile--mini">${tileFace(t)}</span>`).join('')}</span>`).join('');
-      b.riv.innerHTML = game.discards[p].map((d) =>
-        `<span class="tile tile--mini ${d.riichi ? 'is-riichi' : ''} ${d.called ? 'is-called' : ''}">${tileFace(d.tile)}</span>`).join('');
+      // 直前に置かれた1枚だけアニメーションさせる。全部動くとうるさい
+      const last = game.discards[p].length - 1;
+      b.riv.innerHTML = game.discards[p].map((d, i) =>
+        `<span class="tile tile--mini ${d.riichi ? 'is-riichi' : ''} ${d.called ? 'is-called' : ''}${
+          i === last && game.lastDiscard?.p === p ? ' is-new' : ''}">${tileFace(d.tile)}</span>`).join('');
     }
 
     function paintHand() {
@@ -4412,8 +4464,10 @@ const NS_LESSON = (() => {
   const { sfx } = NS_AUDIO;
   const K = NS_COACH;
   const { settings } = NS_SETTINGS;
+  const MJAI = NS_MJAI;
   // lesson.js — レッスンを1ステップずつ進める実行エンジン。
   // 問題形式ごとの描画は STEPS に登録する。新しい形式はここに足すだけで増やせる。
+
 
 
 
@@ -5299,6 +5353,213 @@ const NS_LESSON = (() => {
     return `<table class="ukeire"><thead><tr><th>切る牌</th><th>アガリまで</th><th>受け入れ</th></tr></thead><tbody>${rows}</tbody></table>`;
   }
 
+
+  /** 三手詰めなど、複数手で詰ませる問題。相手は最善で逃げる */
+  STEPS.mateIn = (ctx) => {
+    const s = ctx.step;
+    const game = ctx.lesson.game;
+    const { board, opts, shape } = boardSpec(ctx, s);
+    const limit = s.moves || 3;              // 何手で詰ませるか（自分の手数は (limit+1)/2）
+    const side = game === 'chess' ? (s.side || 'w') : 'b';
+    const foe = game === 'chess' ? (side === 'w' ? 'b' : 'w') : 'w';
+
+    let position = game === 'chess' ? { ...s.board } : null;
+    let state = game === 'shogi' ? JSON.parse(JSON.stringify(s.state)) : null;
+    let from = null, ply = 0, dropKind = null, handHost = null;
+
+    ctx.prompt(s.prompt || `<strong>${limit}手</strong>で詰ませてください。相手は best を尽くして逃げます。`);
+    const info = el('p', 'note');
+    ctx.mount.appendChild(info);
+
+    const pos = () => (game === 'chess' ? position : state.board);
+    const paint = (extra = {}) => board.setPosition(pos(), extra);
+
+    const reset = () => {
+      position = game === 'chess' ? { ...s.board } : null;
+      state = game === 'shogi' ? JSON.parse(JSON.stringify(s.state)) : null;
+      from = null; dropKind = null; ply = 0;
+      ctx.clear(); paint(); paintHand();
+      info.textContent = `${limit}手詰め。あなたの手番です。`;
+    };
+
+    function paintHand() {
+      if (game !== 'shogi') return;
+      const hands = state.hands[state.turn] || {};
+      if (!Object.keys(hands).length) { if (handHost) handHost.innerHTML = ''; return; }
+      if (!handHost) { handHost = el('div', 'hand'); ctx.mount.appendChild(handHost); }
+      renderHand(handHost, hands, {
+        label: 'あなたの持ち駒', order: S.HAND_ORDER, selected: dropKind,
+        onPick: (k) => {
+          dropKind = dropKind === k ? null : k;
+          from = null;
+          const m = {};
+          if (dropKind) for (const t of S.legalDrops(state, dropKind, shape)) m[t] = 'move';
+          paint(m); paintHand();
+        },
+      });
+    }
+
+    const mated = () => game === 'chess'
+      ? C.gameStatus(position, foe, opts) === 'checkmate'
+      : S.gameStatus(state, shape) === 'checkmate';
+    const checking = () => game === 'chess'
+      ? C.inCheck(position, foe, opts)
+      : S.inCheck(state.board, 'w', shape);
+
+    const fail = (msg) => {
+      ctx.miss();
+      ctx.say(`<b>${msg}</b>${s.hint ? `<br><span class="note">${s.hint}</span>` : ''}`, 'ng');
+      setTimeout(reset, 1400);
+    };
+
+    /** 相手の受け。詰まされにくい手を選ぶ */
+    function defend() {
+      if (game === 'chess') {
+        const moves = C.allLegalMoves(position, foe, opts);
+        if (!moves.length) return;
+        const safe = moves.filter((m) =>
+          !C.findMateIn1(C.applyMove(position, m.from, m.to, opts), side, opts).length);
+        const pick = (safe.length ? safe : moves)[0];
+        position = C.applyMove(position, pick.from, pick.to, opts);
+        paint({ [pick.from]: 'last', [pick.to]: 'last' });
+      } else {
+        const moves = S.allLegalMoves(state, shape);
+        if (!moves.length) return;
+        const safe = moves.filter((m) => !S.findMateIn1(S.applyMove(state, m, shape), shape).length);
+        const pick = (safe.length ? safe : moves)[0];
+        state = S.applyMove(state, pick, shape);
+        paint({ ...(pick.from ? { [pick.from]: 'last' } : {}), [pick.to]: 'last' });
+      }
+      paintHand();
+    }
+
+    function afterMyMove(label) {
+      ply++;
+      if (mated()) {
+        board.onPick = null;
+        ctx.solved(`<b>詰みました</b>${s.why || `${ply}手で仕留めました。`}`);
+        return;
+      }
+      const mustCheck = s.mustCheck ?? (game === 'shogi');
+      if (mustCheck && !checking()) {
+        return fail('王手が続いていません。詰将棋では毎手かならず王手をかけます。');
+      }
+      if (ply >= Math.ceil(limit / 2)) return fail(`${limit}手では詰みませんでした。`);
+      info.textContent = '相手が逃げます…';
+      setTimeout(() => {
+        defend();
+        ply++;
+        info.textContent = `あと${Math.ceil((limit - ply) / 2)}手で詰ませます。`;
+      }, 520);
+    }
+
+    board.onPick = (sq) => {
+      const p = pos();
+      if (game === 'shogi' && dropKind) {
+        if (!S.legalDrops(state, dropKind, shape).includes(sq)) return;
+        state = S.applyMove(state, { drop: dropKind, to: sq }, shape);
+        dropKind = null; paint({ [sq]: 'last' }); paintHand(); sfx.place('shogi');
+        return afterMyMove();
+      }
+      const mine = (x) => p[x] && (game === 'chess'
+        ? C.colorOf(p[x]) === side : S.colorOf(p[x]) === 'b');
+      const targets = (x) => game === 'chess'
+        ? C.legalMoves(position, x, opts)
+        : S.legalMovesFrom(state, x, shape).map((m) => m.to);
+      if (from === null) {
+        if (!mine(sq)) return;
+        from = sq;
+        const m = { [sq]: 'sel' };
+        for (const t of targets(sq)) m[t] = 'move';
+        paint(m);
+        return;
+      }
+      if (sq === from) { from = null; paint(); return; }
+      if (!targets(from).includes(sq)) {
+        if (mine(sq)) { from = sq; const m = { [sq]: 'sel' }; for (const t of targets(sq)) m[t] = 'move'; paint(m); }
+        return;
+      }
+      if (game === 'chess') {
+        position = C.applyMove(position, from, sq, opts);
+        paint({ [from]: 'last', [sq]: 'last' });
+      } else {
+        const cands = S.legalMovesFrom(state, from, shape).filter((m) => m.to === sq);
+        const mv = cands.find((m) => m.promote) || cands[0];
+        state = S.applyMove(state, mv, shape);
+        paint({ [from]: 'last', [sq]: 'last' });
+        paintHand();
+      }
+      sfx.place(game);
+      from = null;
+      afterMyMove();
+    };
+
+    reset();
+    ctx.actions([
+      { label: 'やり直す', variant: 'ghost', onClick: reset },
+      { label: 'ヒント', variant: 'ghost', onClick: () => {
+        ctx.miss();
+        ctx.say(`<b>ヒント</b>${s.hint || '先に相手の玉（キング）の逃げ道を全部数えてください。手はそのあとです。'}`);
+      } },
+    ]);
+  };
+
+  /** 捨て牌を見て、いちばん安全な牌を選ぶ */
+  STEPS.safetile = (ctx) => {
+    const s = ctx.step;
+    const discards = s.discards || M.sortTiles(M.makeWall().slice(0, 8));
+    const fake = {
+      discards: [[], discards.map((t) => ({ tile: t })), [], []],
+      melds: [[], [], [], []],
+    };
+    const cands = s.candidates || (() => {
+      const pool = M.ALL_TILES.filter((t) => !discards.includes(t));
+      return M.sortTiles([discards[0], ...shuffle(pool).slice(0, 4)]);
+    })();
+    const scored = cands.map((t) => ({ t, d: MJAI.danger(fake, t, 1) }))
+      .sort((a, b) => a.d - b.d);
+    const bestD = scored[0].d;
+
+    ctx.prompt(s.prompt || '南家がリーチしています。下が南家の捨て牌です。<strong>いちばん安全な牌</strong>を選んでください。');
+    const dh = el('div'); ctx.mount.appendChild(dh);
+    renderTiles(dh, discards, { disabled: true, tight: true });
+    ctx.mount.appendChild(el('p', 'note', 'あなたの手牌から、切る候補はこちらです。'));
+    const ch = el('div'); ctx.mount.appendChild(ch);
+
+    const picked = new Set();
+    const paint = () => {
+      const st = {};
+      cands.forEach((t, i) => { if (picked.has(i)) st[i] = MJAI.danger(fake, t, 1) === bestD ? 'ok' : 'ng'; });
+      renderTiles(ch, cands, {
+        states: st,
+        onPick: (i, t) => {
+          if (picked.has(i)) return;
+          picked.add(i); paint();
+          const d = MJAI.danger(fake, t, 1);
+          if (d === bestD) {
+            const why = d === 0
+              ? `${M.tileName(t)}は南家自身が捨てている牌（現物）です。フリテンのルールにより100%当たりません。`
+              : `${M.tileName(t)}がこの中ではいちばん安全です。`;
+            ctx.solved(`<b>正解</b>${why}`);
+          } else {
+            ctx.miss();
+            ctx.say(`<b>${M.tileName(t)}は危険です</b>${
+              M.isHonor(t) ? '字牌ですが、まだ1枚も見えていません。単騎や双ポンで待たれます。'
+              : Number(t[1]) >= 3 && Number(t[1]) <= 7 ? '3〜7の牌はいちばん当たりやすい牌です。'
+              : '端の牌ですが、現物より危険です。'}`, 'ng');
+          }
+        },
+      });
+    };
+    paint();
+    ctx.actions([{ label: '答えを見る', variant: 'ghost', onClick: () => {
+      ctx.miss();
+      const st = {}; cands.forEach((t, i) => { st[i] = MJAI.danger(fake, t, 1) === bestD ? 'ok' : 'dim'; });
+      renderTiles(ch, cands, { states: st, disabled: true });
+      ctx.solved(`<b>答え</b>${M.tileName(scored[0].t)}がいちばん安全です。`);
+    } }]);
+  };
+
   // --- 共通ヘルパ ----------------------------------------------------------
   function boardSpec(ctx, s) {
     const host = ctx.boardHost();
@@ -5650,10 +5911,10 @@ const NS_DCHESS = (() => {
               },
               {
                 type: 'move', side: 'w', goal: 'mate',
-                board: { h8: 'k', g7: 'P', h1: 'Q', a1: 'K' },
+                board: { h8: 'k', g6: 'P', a7: 'Q', a1: 'K' },
                 prompt: '1手でチェックメイトにしてください。',
-                hint: 'クイーンは縦横斜めに走ります。g7のポーンが味方として効いています。',
-                why: 'クイーンが h7 に入ると、ポーンが守っているので取れず、逃げ道もありません。',
+                hint: 'クイーンは縦横斜めに走ります。g6のポーンが h7 を守っています。',
+                why: 'クイーンが h7 に入ると、g6のポーンが守っているので取れず、g8にも逃げられません。',
               },
               {
                 type: 'move', side: 'w', goal: 'mate',
@@ -6106,6 +6367,229 @@ const NS_DCHESS = (() => {
               { type: 'play', variant: 'mini', prompt: '4×4の盤で1局。指すたびに講評が出ます。' },
               { type: 'play', variant: 'full', goals: ['chess.opening'],
                 prompt: '今度は全部の駒で。中央・展開・キャスリングから始めてください。コーチはその3つができているかも見ます。' },
+            ],
+          },
+        ],
+      },
+      {
+        title: '五　もっと強くなる',
+        lessons: [
+          {
+            id: 'chess.calc', game: 'chess', title: '三手の読み',
+            desc: '「指す→返される→指す」',
+            steps: [
+              {
+                type: 'teach', title: '読むとは、相手の返し手を考えること',
+                body: `<p>「読み」というと難しく聞こえますが、やることは<strong>3手</strong>だけです。</p>
+                  <p><strong>1. 自分がこう指す → 2. 相手はこう返す → 3. 自分はこう指す</strong></p>
+                  <p>重要なのは<u>2番目</u>です。初心者の読みは「自分がこう指せば勝ち」で止まります。
+                  そこに相手の最善の返し手を入れるだけで、見える景色が変わります。</p>
+                  <p>ここからは相手が<strong>いちばん粘る手で逃げてきます</strong>。
+                  1手詰めのように「指して終わり」ではありません。</p>`,
+              },
+              {
+                type: 'mateIn', moves: 3, side: 'w', coords: true,
+                board: { f6: 'K', b1: 'R', h8: 'k' },
+                prompt: 'キングとルークだけで、3手で詰ませてください。相手は最善で逃げます。',
+                hint: 'いきなり王手をかけても逃げられます。まず自分のキングを寄せて、相手の逃げ道を減らしてください。',
+                why: '王手から入らないのがコツでした。「キングで逃げ道を消す → 相手が動く → ルークで仕留める」。これが三手の読みです。',
+              },
+              {
+                type: 'mateIn', moves: 3, side: 'w', coords: true,
+                board: { c6: 'K', h1: 'R', a8: 'k' },
+                prompt: 'もう1問。3手で詰ませてください。',
+                hint: '同じ考え方です。相手のキングが行けるマスを数えて、それを1つずつ消していきます。',
+                why: 'キングとルークだけで詰ませられるようになると、終盤で「勝ちを勝ちにする」ことができます。',
+              },
+              {
+                type: 'teach', title: '読む前に「候補手」を3つに絞る',
+                body: `<p>全部の手を読もうとすると必ず挫折します。強い人も全部は読んでいません。</p>
+                  <p>まず<strong>候補手を3つだけ</strong>挙げます。挙げ方は決まっています。</p>
+                  <p><strong>1. 相手の駒を取る手</strong><br>
+                  <strong>2. 王手をかける手</strong><br>
+                  <strong>3. 相手の駒を狙う手</strong></p>
+                  <p>この3種類を「強い手」といいます。まずこれを探し、それぞれに対して
+                  「相手はどう返すか」を1手だけ考える。それで十分に読めています。</p>`,
+              },
+              {
+                type: 'quiz', prompt: '読むときに、まず探すべき手はどれでしょう。',
+                choices: [
+                  { t: '取る手・王手・狙う手' },
+                  { t: '自分の駒を安全に逃がす手', why: '大事ですが、それは「強い手」がないときの次善です。' },
+                  { t: '定跡どおりの手', why: '中盤以降に定跡はありません。' },
+                ],
+                answer: 0,
+                why: '強い手から読むと、相手の選択肢が少ないので読みやすい。弱い手から読むと枝が増えて迷子になります。',
+              },
+            ],
+          },
+          {
+            id: 'chess.pawnstruct', game: 'chess', title: 'ポーンの形',
+            desc: '勝敗はここで決まっていることが多い',
+            steps: [
+              {
+                type: 'teach', title: 'ポーンは戻れない。だから形が残る',
+                body: `<p>他の駒は動き直せますが、<strong>ポーンだけは後ろに戻れません</strong>。
+                  つまり一度作った形は、その局の最後まで残ります。</p>
+                  <p>だから「ポーンの形」は、盤上でいちばん長持ちする資産であり、負債でもあります。</p>
+                  <p>覚える形は3つだけです。</p>`,
+              },
+              {
+                type: 'teach', title: '通しポーン・孤立ポーン・二重ポーン',
+                body: `<p><strong>通しポーン（パスポーン）</strong>——前方と隣の列に、相手のポーンが1枚もない。
+                  止める駒がいないので、そのまま昇格しにいけます。<u>終盤ではこれ1枚で勝てます。</u></p>
+                  <p><strong>孤立ポーン</strong>——両隣の列に味方のポーンがいない。
+                  ポーンはポーンでしか守れないので、<u>他の駒をずっと守りに使わされます</u>。</p>
+                  <p><strong>二重ポーン</strong>——同じ列に味方のポーンが2枚。
+                  前が詰まって進めず、守り合うこともできません。</p>
+                  <p>実戦での使い方は単純です。<strong>交換するとき、自分のポーンの形が悪くならない方を選ぶ。</strong>
+                  同じ価値の交換なら、形が良くなる方が得です。</p>`,
+                board: {
+                  position: { a4: 'P', c4: 'P', e2: 'P', e3: 'P', h5: 'P', b7: 'p', g7: 'p' },
+                  marks: { c4: 'hint', e2: 'ng', e3: 'ng', h5: 'ok' },
+                },
+              },
+              {
+                type: 'quiz', prompt: '終盤でいちばん価値が高いのはどのポーンでしょう。',
+                choices: [
+                  { t: '通しポーン' },
+                  { t: '二重ポーン', why: '前が詰まって進めません。むしろ弱点です。' },
+                  { t: '孤立ポーン', why: '守るのに他の駒を割かれます。' },
+                ],
+                answer: 0,
+                why: '止める駒がいないポーンは、相手のキングを1枚そこに縛りつけます。それだけで局面が動きます。',
+              },
+              {
+                type: 'move', side: 'w', coords: true,
+                board: { e1: 'K', e8: 'k', d5: 'P', c7: 'p', e7: 'p', d2: 'R' },
+                goal: { to: 'd6' },
+                prompt: 'ポーンを1マス進めてください。この形を通しポーンにできるでしょうか。',
+                hint: 'd5のポーンの前と、隣のc列・e列に相手のポーンがいないか見てください。',
+                why: 'c7とe7の黒ポーンが残っている間は、まだ通しポーンではありません。相手のポーンを消せたときに初めて価値が出ます。',
+              },
+            ],
+          },
+          {
+            id: 'chess.activity', game: 'chess', title: '駒の働きを数える',
+            desc: '点数より、いま何マス利いているか',
+            steps: [
+              {
+                type: 'teach', title: '同じルークでも、働きは倍ちがう',
+                body: `<p>駒の点数（ルーク5、ナイト3…）は<strong>目安にすぎません</strong>。
+                  実際の強さは<u>いま何マスに利いているか</u>で決まります。</p>
+                  <p>たとえばルークは、味方のポーンでふさがれた列にいると2〜3マスしか利きません。
+                  でも<strong>ポーンが1枚もない列（開いた筋）</strong>に置くと、一気に14マスに届きます。</p>
+                  <p>実戦での使い方はこれだけです。<strong>ルークは開いた筋へ。</strong>
+                  指す手に迷ったら、まずこれを探してください。</p>`,
+                board: {
+                  position: { a1: 'R', a2: 'P', d1: 'R', e4: 'P', h7: 'p' },
+                  marks: { a1: 'ng', d1: 'ok' },
+                },
+              },
+              {
+                type: 'teach', title: '悪いビショップ',
+                body: `<p>ビショップは<strong>自分と同じ色のマス</strong>しか通れません。</p>
+                  <p>そこに<u>自分のポーンが同じ色のマスに固まっている</u>と、ビショップは自分の壁に閉じ込められます。
+                  これを<strong>悪いビショップ</strong>といいます。点数は3のままですが、働きは1以下です。</p>
+                  <p>逆にいうと、<strong>ポーンはビショップと違う色のマスに置く</strong>のが良い形です。</p>`,
+                board: {
+                  position: { c1: 'B', b2: 'P', d2: 'P', f2: 'P', h2: 'P' },
+                  marks: { c1: 'ng', b2: 'hint', d2: 'hint', f2: 'hint', h2: 'hint' },
+                },
+              },
+              {
+                type: 'quiz', prompt: '指す手に迷いました。次のうち、まず探すとよいのはどれでしょう。',
+                choices: [
+                  { t: '開いた筋にルークを置けないか' },
+                  { t: 'クイーンを前に出せないか', why: '追い回されて1手損することが多い手です。' },
+                  { t: 'ポーンをできるだけ進める', why: 'ポーンは戻れないので、進めるほど弱点も増えます。' },
+                ],
+                answer: 0,
+                why: '「働いていない駒を働かせる」の具体形がこれです。中盤で迷ったら開いた筋を探してください。',
+              },
+              {
+                type: 'bestmove', side: 'w', coords: true,
+                board: { g1: 'K', g8: 'k', a1: 'R', a2: 'P', d4: 'P', e7: 'p', f7: 'p', g7: 'p' },
+                answers: [{ from: 'a1', to: 'b1' }, { from: 'a1', to: 'c1' }, { from: 'a1', to: 'e1' }, { from: 'a1', to: 'f1' }],
+                prompt: 'ルークを、いちばんよく働く場所へ動かしてください。',
+                hint: 'a列は自分のポーンでふさがっています。ポーンのない列はどこでしょう。',
+                why: '自分のポーンに前をふさがれた駒は働けません。開いた筋に移すだけで価値が変わります。',
+              },
+            ],
+          },
+          {
+            id: 'chess.trade', game: 'chess', title: '交換するかどうか',
+            desc: '同じ点数でも、得な交換と損な交換がある',
+            steps: [
+              {
+                type: 'teach', title: '3つの判断基準',
+                body: `<p>ナイトとビショップはどちらも3点。でも交換していいかは局面で変わります。
+                  判断は3つの問いで足ります。</p>
+                  <p><strong>1. 自分がリードしているか。</strong>駒得しているなら、どんどん交換する。
+                  駒が減るほど、1枚の差が大きくなります。逆に負けているなら交換を避ける。</p>
+                  <p><strong>2. どちらの駒がよく働いているか。</strong>
+                  働いていない自分の駒と、よく働いている相手の駒を交換できるなら、点数が同じでも得です。</p>
+                  <p><strong>3. 交換したあと、ポーンの形はどうなるか。</strong>
+                  取り返すときに二重ポーンができるなら、その交換は損かもしれません。</p>`,
+              },
+              {
+                type: 'quiz', prompt: 'ナイトを1枚多く持っています（駒得）。交換の方針は？',
+                choices: [
+                  { t: '積極的に交換していく' },
+                  { t: '交換を避けて駒を残す', why: '駒が多いほど、相手に逆転の材料を与えます。' },
+                  { t: '交換は関係ない', why: '大きく関係します。終盤に近づくほど1枚の差が効きます。' },
+                ],
+                answer: 0,
+                why: '「勝っているときは交換、負けているときは温存」。これは将棋にも麻雀にも通じる考え方です。',
+              },
+              {
+                type: 'quiz', prompt: '自分の眠っているビショップと、相手のよく働くナイトを交換できます。',
+                choices: [
+                  { t: '交換したほうがよい' },
+                  { t: '点数が同じなので意味がない', why: '点数は同じでも、盤の上での働きが違います。' },
+                  { t: 'ビショップの方が強いので損', why: '閉じた局面ではナイトの方が強いこともあります。' },
+                ],
+                answer: 0,
+                why: '働いていない駒を、働いている駒と交換する。これが「点数が同じでも得な交換」です。',
+              },
+            ],
+          },
+          {
+            id: 'chess.defense', game: 'chess', title: '守り方',
+            desc: '相手の狙いを、起きる前に消す',
+            steps: [
+              {
+                type: 'teach', title: '攻められてから考えるのでは遅い',
+                body: `<p>ここまでは自分が何をするかの話でした。最後は<strong>相手に何をさせないか</strong>です。</p>
+                  <p>やることは毎手の1番目の問い——<u>「相手の直前の手は何を狙っているか」</u>——を、
+                  もう一歩進めるだけです。</p>
+                  <p><strong>狙いが分かったら、起きる前につぶす。</strong>
+                  これを<u>予防</u>といいます。強い人が地味な手を指しているとき、たいていこれをやっています。</p>
+                  <p>具体的な手は3つ。<strong>逃げる／守りを足す／その駒の利きを止める。</strong>
+                  そして忘れがちな4つ目が<strong>もっと強い手で反撃する</strong>です。
+                  相手の狙いより大きい狙いを作れば、守る必要がなくなります。</p>`,
+              },
+              {
+                type: 'danger', side: 'w', coords: true,
+                board: { g1: 'K', g8: 'k', f3: 'N', d5: 'B', c6: 'n', e6: 'p', a1: 'R', h4: 'q' },
+                prompt: '相手が狙っている自分の駒を全部タップしてください。',
+                why: '守る前に、まず何が狙われているかを正確に知る。順番はいつもこれです。',
+              },
+              {
+                type: 'bestmove', side: 'w', coords: true,
+                board: { g1: 'K', g8: 'k', d5: 'B', e6: 'p', a1: 'R', g7: 'p', f7: 'p' },
+                prompt: 'ビショップが狙われています。いちばんよい対処をしてください。',
+                hint: '逃げる・守る・反撃する。この局面ではどれが成立しますか。',
+                why: '狙われた駒は、逃がすだけが答えではありません。ただ、逃げ道があるなら確実に逃がすのが基本です。',
+              },
+              {
+                type: 'teach', title: '守りすぎない',
+                body: `<p>最後にひとつ。<strong>すべての駒を守る必要はありません。</strong></p>
+                  <p>初心者が陥りやすいのが「全部の駒を守ろうとして、何も攻められなくなる」状態です。
+                  守りに使った駒は、その間ずっと働いていません。</p>
+                  <p>判断はこうです。<u>取られて損なものだけを守る。</u>
+                  ポーン1枚のために、ルークを守りに縛りつけるのは割に合いません。</p>`,
+              },
             ],
           },
         ],
@@ -6837,6 +7321,204 @@ const NS_DSHOGI = (() => {
                 prompt: '5五将棋で1局。指すたびに講評が出ます。' },
               { type: 'play', variant: 'big', goals: ['shogi.castle', 'shogi.attack'],
                 prompt: '本将棋で1局。まず玉を囲うことから始めてください。コーチは囲いができているかも見ます。' },
+            ],
+          },
+        ],
+      },
+      {
+        title: '六　もっと強くなる',
+        lessons: [
+          {
+            id: 'shogi.calc', game: 'shogi', title: '三手の読み',
+            desc: '「指す→返される→指す」',
+            steps: [
+              {
+                type: 'teach', title: '将棋の読みは、まずここから',
+                body: `<p>「読み」と聞くと10手20手を想像しますが、まず身につけるのは<strong>三手</strong>です。</p>
+                  <p><strong>1. 自分がこう指す → 2. 相手はこう受ける → 3. 自分はこう指す</strong></p>
+                  <p>大事なのは<u>2番目</u>。初心者の読みは「こう指せば取れる」で終わります。
+                  そこに相手の受けを1つ入れるだけで、読みになります。</p>
+                  <p>ここからは相手が<strong>いちばん粘る手で受けてきます</strong>。
+                  一手詰めのように、指して終わりではありません。</p>`,
+              },
+              {
+                type: 'mateIn', moves: 3, shape: BIG, coords: true,
+                state: { board: { '11': 'k', '12': 's', '99': 'K' }, hands: { b: { G: 1, B: 1 }, w: {} }, turn: 'b' },
+                prompt: '3手で詰ませてください。持ち駒の角と金が使えます。',
+                hint: '角は斜めに走ります。遠くから玉を睨む場所に打つと、逃げ道が一気に減ります。',
+                why: '「遠くから王手 → 逃げる → 持ち駒で仕留める」。持ち駒があるから、将棋の詰みは急に決まります。',
+              },
+              {
+                type: 'mateIn', moves: 3, shape: BIG, coords: true,
+                state: { board: { '13': 'k', '24': 'S', '99': 'K' }, hands: { b: { G: 1, R: 1 }, w: {} }, turn: 'b' },
+                prompt: 'もう1問。持ち駒の飛と金で3手詰めです。',
+                hint: '飛車は縦横に走ります。まず逃げ道をふさぐ王手から入ります。',
+                why: '大駒で追い、持ち駒で仕留める。終盤でいちばん多く出てくる形です。',
+              },
+              {
+                type: 'teach', title: '候補手を3つに絞る',
+                body: `<p>全部読もうとすると挫折します。プロも全部は読んでいません。
+                  <strong>候補を3つだけ</strong>挙げて、それぞれに相手の受けを1つ考える。これで十分です。</p>
+                  <p>挙げ方は決まっています。<strong>取る手・王手・当てる手（相手の駒を狙う手）。</strong>
+                  この3種類を「強い手」といいます。</p>
+                  <p>強い手から読むと、相手の応手が限られるので読みやすい。
+                  弱い手から読むと枝が増えて迷子になります。</p>`,
+              },
+            ],
+          },
+          {
+            id: 'shogi.kuzushi', game: 'shogi', title: '囲いを崩す',
+            desc: '端から、金銀を剥がす',
+            steps: [
+              {
+                type: 'teach', title: '正面から行っても抜けない',
+                body: `<p>相手が囲っていると、正面には金銀が3枚並んでいます。そこへ突っ込んでも跳ね返されます。</p>
+                  <p>崩し方の基本は2つです。</p>
+                  <p><strong>1. 端（1筋・9筋）から攻める。</strong>
+                  囲いは中央〜自陣側に厚く、端は薄い。端の歩を突いて香車や桂馬を使うと、金銀の外側から入れます。</p>
+                  <p><strong>2. 金銀を1枚ずつ剥がす。</strong>
+                  囲いは「3枚あるから固い」だけです。1枚剥がせば急に薄くなります。
+                  玉に直接迫るより、まず守り駒を狙う方が早い。</p>`,
+              },
+              {
+                type: 'teach', title: '端攻めの手順',
+                body: `<p>端攻めは手順が決まっています。覚えてしまえば毎局使えます。</p>
+                  <p><strong>1. 端の歩を突く（9六歩など）</strong>——相手も歩を突いて受けます。<br>
+                  <strong>2. さらに突いて歩を交換する</strong>——持ち駒に歩が入ります。<br>
+                  <strong>3. 空いた筋に香車を走らせる</strong>——縦一直線に玉のそばまで届きます。<br>
+                  <strong>4. 桂馬を跳ねて絡める</strong>——金銀の頭を叩けます。</p>
+                  <p>この4手で、囲いの端がほどけます。攻め手が思いつかないときは、まず端を見てください。</p>`,
+                board: {
+                  shape: BIG, coords: true,
+                  position: { '19': 'L', '29': 'N', '16': 'P', '13': 'p', '22': 'k', '32': 'g', '23': 'g' },
+                  marks: { '16': 'hint', '19': 'hint' },
+                },
+              },
+              {
+                type: 'quiz', prompt: '相手の囲いを崩すとき、まず狙うべきはどれでしょう。',
+                choices: [
+                  { t: '囲いの端、または守りの金銀' },
+                  { t: '玉そのもの', why: '金銀3枚に守られた玉に直接迫っても、たいてい跳ね返されます。' },
+                  { t: '相手の飛車', why: '大駒を押さえるのは大事ですが、囲い崩しとは別の話です。' },
+                ],
+                answer: 0,
+                why: '玉は最後です。まわりの守りを1枚ずつ減らしてから、玉に迫ります。',
+              },
+              {
+                type: 'danger', shape: BIG, coords: true,
+                state: { board: { '59': 'K', '22': 'k', '32': 'g', '23': 'g', '16': 'P', '19': 'L', '13': 'p', '28': 'R' }, hands: { b: {}, w: {} }, turn: 'b' },
+                prompt: 'まず現状把握です。取られてしまう自分の駒を全部タップしてください。',
+                why: '攻める前に、自分の駒が無事かを確かめる。順番はいつもこれです。',
+              },
+            ],
+          },
+          {
+            id: 'shogi.uke', game: 'shogi', title: '受けの手筋',
+            desc: '攻められたときにやること',
+            steps: [
+              {
+                type: 'teach', title: '受けの選択肢は4つ',
+                body: `<p>攻められたとき、やれることは4つしかありません。知っているだけで慌てなくなります。</p>
+                  <p><strong>1. 取る</strong>——攻めてきた駒を取れるなら、それがいちばん確実です。<br>
+                  <strong>2. 逃げる</strong>——狙われた駒を安全な場所へ。<br>
+                  <strong>3. 合駒する</strong>——飛車・角・香の利きの間に駒を置いて止めます。将棋は持ち駒があるので、これが使いやすい。<br>
+                  <strong>4. 守りを足す</strong>——狙われたマスに、もう1枚利かせます。</p>
+                  <p>順番も決まっています。<u>取れるなら取る。取れないなら逃げる。逃げられないなら合駒か、守りを足す。</u></p>`,
+              },
+              {
+                type: 'teach', title: '底歩という受け',
+                body: `<p>覚えておくと一生使える受けがあります。<strong>底歩（そこふ）</strong>です。</p>
+                  <p>自陣のいちばん下の段（9段目）に歩を打って、金の下に置く。
+                  これだけで、横から飛車で攻められたときの抵抗力が跳ね上がります。</p>
+                  <p>なぜ強いかというと、金は下から支えられると動かされないからです。
+                  「金底の歩、岩より堅し」という言葉があります。</p>
+                  <p>持ち駒に歩があって、自陣が薄いと感じたら、まず底歩を考えてください。</p>`,
+                board: {
+                  shape: BIG, coords: true,
+                  position: { '28': 'K', '38': 'G', '39': 'P', '18': 'P', '27': 'P' },
+                  marks: { '39': 'hint' },
+                },
+              },
+              {
+                type: 'quiz', prompt: '飛車で横から攻められています。まず考えるべき受けはどれでしょう。',
+                choices: [
+                  { t: '取れるなら取る' },
+                  { t: 'とにかく玉を逃がす', why: '玉を動かすと囲いが崩れます。まず取れないかを見ます。' },
+                  { t: '反撃する', why: '速度計算ができるようになってからの選択です。' },
+                ],
+                answer: 0,
+                why: '取る → 逃げる → 合駒／守りを足す。この順に考えるだけで、受けは形になります。',
+              },
+              {
+                type: 'teach', title: '玉の早逃げ',
+                body: `<p>もうひとつ。<strong>「玉の早逃げ八手の得」</strong>という言葉があります。</p>
+                  <p>攻められそうだと感じたら、<u>攻められる前に玉を安全なほうへ1マス動かしておく</u>。
+                  これだけで詰まなくなることがよくあります。</p>
+                  <p>初心者は玉を動かすのをもったいなく感じますが、逆です。
+                  玉が安全なら、多少駒を損しても負けません。<strong>玉が詰まなければ負けない</strong>のが将棋です。</p>`,
+              },
+            ],
+          },
+          {
+            id: 'shogi.speed', game: 'shogi', title: '詰めろと必至',
+            desc: '終盤の速度計算',
+            steps: [
+              {
+                type: 'teach', title: '「あと何手で詰むか」を数える',
+                body: `<p>終盤は「どちらが1手早いか」の勝負だと第五章で書きました。
+                  その「早さ」を数えるための言葉が2つあります。</p>
+                  <p><strong>詰めろ</strong>——次の自分の手番で詰ませられる状態。
+                  相手は受けないと、次に負けます。</p>
+                  <p><strong>必至（ひっし）</strong>——どう受けても詰みを防げない詰めろ。
+                  これをかけたら、相手が自分を詰ませない限り勝ちです。</p>
+                  <p>実戦での使い方はこうです。<u>相手に詰めろをかけられたら、受けるか、自分が先に詰ますか</u>。
+                  自分の攻めが1手早いなら、受けずに攻めます。</p>`,
+              },
+              {
+                type: 'quiz', prompt: '相手に詰めろをかけられました。自分は相手を1手で詰ませられます。どうしますか。',
+                choices: [
+                  { t: '受けずに詰ましにいく' },
+                  { t: '受ける', why: '自分が先に詰ませられるなら、受ける必要はありません。1手損になります。' },
+                  { t: '駒を取って得をする', why: '終盤に駒の損得はありません。速度だけです。' },
+                ],
+                answer: 0,
+                why: 'これが速度計算です。「自分が何手で詰ますか」と「相手が何手で詰ますか」を比べるだけです。',
+              },
+              {
+                type: 'quiz', prompt: '終盤、飛車を取られる代わりに1手早く攻められます。どうしますか。',
+                choices: [
+                  { t: '飛車を捨てて攻める' },
+                  { t: '飛車を逃がす', why: '1手使うと、相手の攻めが1手早くなります。' },
+                  { t: '状況による', why: 'この問題では「1手早くなる」と分かっているので、迷う必要はありません。' },
+                ],
+                answer: 0,
+                why: '中盤までの「駒を大事に」を、終盤では捨てる必要があります。ここが将棋のいちばん難しく、面白いところです。',
+              },
+              {
+                type: 'move', shape: BIG, goal: 'mate', coords: true,
+                state: { board: { '11': 'k', '13': 'G', '23': 'G', '99': 'K' }, hands: { b: { G: 1 }, w: {} }, turn: 'b' },
+                prompt: '1手で詰ませてください。速度計算は、まず詰みが見えることから始まります。',
+                hint: '玉の逃げ道は1二と2二と2一。持ち駒の金でどこをふさぎますか。',
+                why: '詰みが見えるようになると、「あと何手で詰むか」が数えられるようになります。',
+              },
+            ],
+          },
+          {
+            id: 'shogi.practice', game: 'shogi', title: '総仕上げ',
+            desc: '囲って、攻めて、詰ます',
+            steps: [
+              {
+                type: 'teach', title: '1局の流れをひととおり',
+                body: `<p>ここまでの内容を1局の中で通します。やることは3つの段階に分かれています。</p>
+                  <p><strong>序盤（〜20手）</strong>：玉を囲う。飛車と玉を引き離す。金銀3枚を玉に寄せる。<br>
+                  <strong>中盤</strong>：歩から攻める。端か、守りの金銀を狙う。攻めは3枚。<br>
+                  <strong>終盤</strong>：駒の損得を忘れ、速度だけを見る。逃げ道を数えてから王手。</p>
+                  <p>コーチが「囲えているか」「歩から攻めているか」も見ています。</p>`,
+              },
+              {
+                type: 'play', variant: 'big', goals: ['shogi.castle', 'shogi.attack'],
+                prompt: '本将棋で1局。囲う→攻める→詰ます、の流れを意識してください。',
+              },
             ],
           },
         ],
@@ -7652,6 +8334,202 @@ const NS_DMAHJONG = (() => {
               {
                 type: 'play4', rule: { naki: true },
                 prompt: '鳴きありで1局。役牌が2枚あるときだけ鳴く、を試してみてください。',
+              },
+            ],
+          },
+        ],
+      },
+      {
+        title: '八　もっと強くなる',
+        lessons: [
+          {
+            id: 'mahjong.blocks', game: 'mahjong', title: '5ブロックで考える',
+            desc: '手牌を5つのかたまりに分ける',
+            steps: [
+              {
+                type: 'teach', title: '13枚を、5つのかたまりとして見る',
+                body: `<p>アガリの形は<strong>4面子＋1雀頭</strong>。つまり<u>かたまりが5つ</u>あればいい。
+                  これを<strong>5ブロック</strong>といいます。</p>
+                  <p>手牌をバラバラの13枚として見るのをやめて、<strong>かたまりの数を数える</strong>ようにすると、
+                  切る牌が自然に決まります。</p>
+                  <p><strong>かたまりが6つ以上 → いちばん弱いかたまりを外す</strong><br>
+                  <strong>かたまりが4つ以下 → 孤立牌から新しいかたまりを作る</strong></p>
+                  <p>第六章でやった「ターツが5つ以上なら弱いものを外す」は、この考え方の一部でした。
+                  雀頭も1ブロックと数えるのがコツです。</p>`,
+                tiles: ['m2', 'm3', 'p5', 'p6', 's7', 's8', 'z5', 'z5', 'm7', 'm8', 'p1', 'p2', 's3'],
+              },
+              {
+                type: 'quiz', prompt: 'アガリまでに必要な「かたまり」はいくつでしょう。',
+                choices: [
+                  { t: '5つ（4面子＋雀頭）' },
+                  { t: '4つ', why: '雀頭を忘れています。雀頭も1つのかたまりです。' },
+                  { t: '6つ', why: '6つ作ると牌が足りません。14枚に収まりません。' },
+                ],
+                answer: 0,
+                why: '3枚×4＋2枚＝14枚。かたまりは5つで打ち止めです。6つ目を抱えると、どれかが完成しません。',
+              },
+              {
+                type: 'quiz', prompt: 'かたまりが6つできてしまいました。どうしますか。',
+                choices: [
+                  { t: 'いちばん弱いかたまりを外す' },
+                  { t: '全部育てる', why: '牌が足りません。6つ育てると、どれも完成しないまま終わります。' },
+                  { t: '雀頭を外す', why: '雀頭は必ず1つ必要です。真っ先に外してはいけません。' },
+                ],
+                answer: 0,
+                why: '弱い順は、辺張（12・89）→ 嵌張（1_3）→ 対子 → 両面。外すのはこの順です。',
+              },
+              { type: 'discard', sets: 4 },
+              { type: 'discard', sets: 4 },
+              { type: 'discard', sets: 4 },
+            ],
+          },
+          {
+            id: 'mahjong.yomi', game: 'mahjong', title: '危険牌を読む',
+            desc: 'スジと壁',
+            steps: [
+              {
+                type: 'teach', title: '現物の次に安全な牌',
+                body: `<p>現物（相手の捨て牌）がなくなったら、次は何を切るか。
+                  完全に安全ではありませんが、<strong>比較的安全</strong>な牌の見分け方が2つあります。</p>
+                  <p><strong>スジ</strong>——相手が4萬を捨てているなら、1萬と7萬は<u>両面待ちでは当たりません</u>。
+                  なぜなら、1萬で当たる両面は「2萬3萬」で、その形なら4萬でも当たるからです。
+                  4萬を捨てている＝フリテンなので、その待ちはありえない。</p>
+                  <p>ただし<u>嵌張・辺張・単騎・双ポンでは当たります</u>。「両面では当たらない」だけです。
+                  実戦で待ちの6割くらいが両面なので、それでもかなり有効です。</p>
+                  <p>数字の組は <strong>1-4-7 / 2-5-8 / 3-6-9</strong> の3組だけ。これだけ覚えれば足ります。</p>`,
+              },
+              {
+                type: 'teach', title: '壁（ カベ ）',
+                body: `<p>もうひとつが<strong>壁</strong>です。</p>
+                  <p>ある牌が<u>4枚とも見えている</u>とき（自分の手牌＋捨て牌＋鳴いた牌）、
+                  その牌を使う待ちは存在しません。</p>
+                  <p>たとえば3筒が4枚見えているなら、「1筒2筒で3筒待ち」も「3筒4筒で2筒・5筒待ち」も作れません。
+                  つまり<strong>1筒2筒が安全度の高い牌になります</strong>。</p>
+                  <p>やることは単純です。<u>自分の手に同じ牌が3〜4枚あったら、その周辺は切りやすい</u>と覚えてください。</p>`,
+                tiles: ['p3', 'p3', 'p3', 'p3'],
+              },
+              {
+                type: 'quiz', prompt: '相手が5筒を捨てています。スジになるのはどの牌でしょう。',
+                tiles: ['p5'],
+                choices: [
+                  { t: '2筒と8筒' },
+                  { t: '4筒と6筒', why: 'それは「またぎスジ」といって、むしろ危険な牌です。' },
+                  { t: '1筒と9筒', why: '5のスジは 2-5-8 の組です。1と9は別の組（1-4-7、3-6-9）です。' },
+                ],
+                answer: 0,
+                why: '1-4-7 / 2-5-8 / 3-6-9 の3組。5のスジは2と8です。',
+              },
+              { type: 'safetile' },
+              { type: 'safetile' },
+              {
+                type: 'teach', title: '読みすぎない',
+                body: `<p>最後に大事なことを。<strong>読みは補助です。</strong></p>
+                  <p>スジも壁も「絶対」ではありません。当たるときは当たります。
+                  いちばん確実なのは今も昔も<u>現物</u>です。</p>
+                  <p>読みが役に立つのは、<strong>現物が尽きたとき</strong>と、
+                  <strong>押したいけれど少しでも安全な牌を選びたいとき</strong>だけ。
+                  読みに凝って現物を切り惜しむのは本末転倒です。</p>`,
+              },
+            ],
+          },
+          {
+            id: 'mahjong.betaori', game: 'mahjong', title: 'ベタオリの手順',
+            desc: '降りると決めたあとにやること',
+            steps: [
+              {
+                type: 'teach', title: '降りるのも技術',
+                body: `<p>「降りる」と決めたあと、実は<strong>手順</strong>があります。
+                  適当に安全牌を切っていると、途中で切る牌がなくなって結局押すはめになります。</p>
+                  <p><strong>1. 安全牌が何枚あるか数える。</strong>
+                  現物が3枚あるなら、3巡しのげます。残りの巡目と比べてください。</p>
+                  <p><strong>2. 安全度の低いものから切る。</strong>
+                  ここが逆になりがちです。いちばん安全な牌は<u>最後に取っておく</u>。
+                  終盤になるほど相手の待ちは絞られ、危険度が上がるからです。</p>
+                  <p><strong>3. 手牌を壊すのをためらわない。</strong>
+                  降りると決めたら、アガリは諦めます。両面を崩してでも安全牌を作ります。</p>`,
+              },
+              {
+                type: 'quiz', prompt: '降りるとき、現物が3枚あります。どの順に切りますか。',
+                choices: [
+                  { t: '安全度の低いものから切り、現物は後に残す' },
+                  { t: '現物から先に切る', why: '終盤ほど危険度が上がるので、確実な牌を後に残します。' },
+                  { t: '手が進む牌から切る', why: '降りると決めたなら、手を進める必要はありません。' },
+                ],
+                answer: 0,
+                why: '安全牌は「巡目の貯金」です。終盤ほど価値が上がるので、後に取っておきます。',
+              },
+              {
+                type: 'quiz', prompt: '降りたいのに安全牌が1枚もありません。どうしますか。',
+                choices: [
+                  { t: 'いちばん危険度の低い牌を選んで切る' },
+                  { t: 'テンパイを目指して押す', why: '手が遠いから降りたいはずです。方針が矛盾しています。' },
+                  { t: '牌を切らずに待つ', why: '麻雀では毎巡かならず1枚切ります。切らない選択はできません。' },
+                ],
+                answer: 0,
+                why: 'ゼロか100かではありません。スジ、壁、字牌の見えた枚数——少しでも当たりにくい牌を選びます。',
+              },
+              {
+                type: 'teach', title: '安全牌は序盤に確保しておく',
+                body: `<p>いちばん効くのは、実は<strong>リーチが来る前</strong>の準備です。</p>
+                  <p>序盤に手牌の字牌を全部切ってしまうと、いざリーチが来たときに何も残っていません。
+                  <u>字牌を1枚だけ残しておく</u>。これだけで、危ない1巡をしのげます。</p>
+                  <p>とくに<strong>誰かがすでに捨てている字牌</strong>は、安全度が高いうえに他人も欲しがりません。
+                  抱えておく価値があります。</p>
+                  <p>手が進むかどうかで1枚ぶん損しますが、振り込む損に比べれば安いものです。</p>`,
+              },
+              {
+                type: 'play4', rule: { naki: false },
+                prompt: 'リーチが来たときの手順を意識して1局。コーチが押し引きを見ています。',
+              },
+            ],
+          },
+          {
+            id: 'mahjong.situation', game: 'mahjong', title: '点数状況で打ち方を変える',
+            desc: 'トップ目と、ラス目では違う',
+            steps: [
+              {
+                type: 'teach', title: '同じ手でも、状況で正解が変わる',
+                body: `<p>ここまでは「その手をどう打つか」だけを考えてきました。
+                  実際の麻雀では<strong>点数状況</strong>で正解が変わります。</p>
+                  <p><strong>トップ目のとき</strong>——守りを厚く。無理にあがらず、局を早く終わらせる。
+                  半荘が進むほど、点差を守る価値が上がります。</p>
+                  <p><strong>ラス目のとき</strong>——攻めを厚く。安い手であがっても順位は変わりません。
+                  打点（高い手）を狙う価値があります。</p>
+                  <p><strong>オーラス（最終局）</strong>——ここだけは点数計算が必要です。
+                  「あと何点あれば順位が上がるか」を先に計算して、それに届く手を作ります。</p>`,
+              },
+              {
+                type: 'quiz', prompt: 'あなたはトップ目です。手はあと3枚必要、誰かがリーチしました。',
+                choices: [
+                  { t: '降りる' },
+                  { t: '押す', why: 'トップ目で手が遠いのに押すのは、いちばん損な打ち方です。' },
+                  { t: '鳴いて速度を上げる', why: '守りが薄くなります。トップ目でやることではありません。' },
+                ],
+                answer: 0,
+                why: 'トップ目は「あがらなくても勝っている」状態です。失点を避けることが、そのまま勝ちにつながります。',
+              },
+              {
+                type: 'quiz', prompt: 'オーラス、あなたはラス目で、3着とは2000点差です。何を狙いますか。',
+                choices: [
+                  { t: '2000点を超えるアガリ' },
+                  { t: 'できるだけ高い手', why: '高い手を狙って流局すると、順位は変わりません。まず届く手を確実に。' },
+                  { t: '相手の放銃を待つ', why: '待っているだけでは順位は上がりません。' },
+                ],
+                answer: 0,
+                why: 'オーラスは「必要な点数」から逆算します。それを超えるなら、安い手でも十分です。',
+              },
+              {
+                type: 'teach', title: 'とはいえ、まずは基本',
+                body: `<p>状況判断は大事ですが、<strong>順番としては最後</strong>です。</p>
+                  <p>牌効率（受け入れを広く）と押し引き（手が遠ければ降りる）が安定してから、
+                  状況判断を足してください。基本ができていないうちに状況判断に凝ると、
+                  かえって手がちぐはぐになります。</p>
+                  <p>優先順位はこうです。<br>
+                  <strong>1. 受け入れを広く打つ　2. 押し引きを間違えない　3. 点数状況で微調整</strong></p>`,
+              },
+              {
+                type: 'play4', rule: { naki: true },
+                prompt: '最後に1局。鳴きあり、コーチつきです。ここまでの全部を使ってください。',
               },
             ],
           },
