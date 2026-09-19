@@ -287,6 +287,13 @@ button { font: inherit; color: inherit; }
 }
 .toggle input { accent-color: var(--tone); width: 1.05rem; height: 1.05rem; }
 
+.checks { list-style: none; margin: .7rem auto 0; padding: 0; width: min(100%, 26rem); }
+.checks li {
+  font-size: .88rem; color: var(--sumi-soft); padding: .2rem 0;
+  border-bottom: 1px dashed var(--paper-2);
+}
+.checks li[data-ok] { color: var(--ok); font-weight: 500; }
+
 /* ── 4人打ちの卓 ──────────────────────────────────────── */
 /* 上＝対面、左＝上家、右＝下家、下＝自分。河が中央を囲む本来の並び。
    左右の河は回転させる。牌の大きさから卓の寸法を全部導いている。 */
@@ -571,11 +578,19 @@ const NS_CHESS = (() => {
       const startRank = me === 'w' ? 1 : h - 2;
       if (onBoard(f, r + dir, w, h) && !at(f, r + dir)) {
         out.push(sq(f, r + dir));
-        if (!opts.noPawnDouble && r === startRank && !at(f, r + 2 * dir)) out.push(sq(f, r + 2 * dir));
+        // 2マス進みは6段以上の盤だけ。4×4などで使うと初手で昇格してしまう
+        if (!opts.noPawnDouble && h >= 6 && r === startRank
+          && onBoard(f, r + 2 * dir, w, h) && !at(f, r + 2 * dir)) out.push(sq(f, r + 2 * dir));
       }
       for (const df of [-1, 1]) {
-        const t = onBoard(f + df, r + dir, w, h) ? at(f + df, r + dir) : null;
+        if (!onBoard(f + df, r + dir, w, h)) continue;
+        const t = at(f + df, r + dir);
         if (t && (opts.anyColor || colorOf(t) !== me)) out.push(sq(f + df, r + dir));
+        // アンパッサン（opts.ep に「通過したマス」が入っているときだけ）
+        else if (!t && opts.ep && opts.ep === sq(f + df, r + dir)) {
+          const victim = at(f + df, r);
+          if (victim && kindOf(victim) === 'P' && colorOf(victim) !== me) out.push(opts.ep);
+        }
       }
       return out;
     }
@@ -595,10 +610,26 @@ const NS_CHESS = (() => {
     return null;
   }
 
+  /**
+   * その駒が「利いている」マス。ポーンは斜め前だけ（前進は攻撃ではない）。
+   * 空きマスへの利きも数えるので、キャスリングの判定や利きの表示に使える。
+   */
+  function attacks(board, from, opts = {}) {
+    const piece = board[from];
+    if (!piece) return [];
+    if (kindOf(piece) !== 'P') return pseudoMoves(board, from, { w: opts.w, h: opts.h, anyColor: true, noPawnDouble: true });
+    const w = opts.w ?? 8, h = opts.h ?? 8;
+    const [f, r] = idx(from);
+    const dir = colorOf(piece) === 'w' ? 1 : -1;
+    const out = [];
+    for (const df of [-1, 1]) if (onBoard(f + df, r + dir, w, h)) out.push(sq(f + df, r + dir));
+    return out;
+  }
+
   function isAttacked(board, target, byColor, opts = {}) {
     for (const [s, p] of Object.entries(board)) {
       if (colorOf(p) !== byColor) continue;
-      if (pseudoMoves(board, s, opts).includes(target)) return true;
+      if (attacks(board, s, opts).includes(target)) return true;
     }
     return false;
   }
@@ -613,10 +644,19 @@ const NS_CHESS = (() => {
     const next = { ...board };
     let piece = next[from];
     delete next[from];
-    // プロモーション（自動でクイーン。学習段階では選択させない）
     if (kindOf(piece) === 'P') {
+      // アンパッサン：斜めに空きマスへ進んだら、横にいる相手のポーンを取る
+      if (from[0] !== to[0] && !board[to]) delete next[to[0] + from[1]];
+      // プロモーション（自動でクイーン。学習段階では選択させない）
       const lastRank = colorOf(piece) === 'w' ? RANKS[h - 1] : RANKS[0];
       if (to[1] === lastRank) piece = colorOf(piece) === 'w' ? 'Q' : 'q';
+    }
+    // キャスリング：キングが2マス横に動いたら、ルークも反対側へ
+    if (kindOf(piece) === 'K' && Math.abs(FILES.indexOf(from[0]) - FILES.indexOf(to[0])) === 2) {
+      const rank = from[1];
+      const kingSide = to[0] === 'g';
+      const rFrom = (kingSide ? 'h' : 'a') + rank, rTo = (kingSide ? 'f' : 'd') + rank;
+      if (next[rFrom]) { next[rTo] = next[rFrom]; delete next[rFrom]; }
     }
     next[to] = piece;
     return next;
@@ -628,9 +668,53 @@ const NS_CHESS = (() => {
     if (!piece) return [];
     const me = colorOf(piece);
     if (!findKing(board, me)) return pseudoMoves(board, from, opts); // キングのいない練習盤
-    return pseudoMoves(board, from, opts).filter(
+    const out = pseudoMoves(board, from, opts).filter(
       (to) => !inCheck(applyMove(board, from, to, opts), me, opts)
     );
+    return kindOf(piece) === 'K' ? out.concat(castleMoves(board, from, opts)) : out;
+  }
+
+  /**
+   * キャスリングの行き先（キングの着地マス）。opts.castle = { w:{k,q}, b:{k,q} } のときだけ。
+   * 条件：キングもルークも初期位置／間が空いている／いまチェックされていない／
+   * キングが通るマスと着くマスが攻撃されていない。
+   */
+  function castleMoves(board, from, opts = {}) {
+    const piece = board[from];
+    if (!piece || kindOf(piece) !== 'K' || !opts.castle) return [];
+    if ((opts.w ?? 8) !== 8 || (opts.h ?? 8) !== 8) return [];
+    const me = colorOf(piece), foe = me === 'w' ? 'b' : 'w';
+    const rank = me === 'w' ? '1' : '8';
+    const rights = opts.castle[me] || {};
+    if (from !== 'e' + rank || inCheck(board, me, opts)) return [];
+    const rook = me === 'w' ? 'R' : 'r';
+    const out = [];
+    const free = (fs) => fs.every((f) => !board[f + rank]);
+    const safe = (fs) => fs.every((f) => !isAttacked(board, f + rank, foe, opts));
+    if (rights.k && board['h' + rank] === rook && free(['f', 'g']) && safe(['f', 'g'])) out.push('g' + rank);
+    if (rights.q && board['a' + rank] === rook && free(['b', 'c', 'd']) && safe(['c', 'd'])) out.push('c' + rank);
+    return out;
+  }
+
+  /** 1手指したあとの、キャスリング権とアンパッサンのマス */
+  function nextRights(opts, board, from, to) {
+    const piece = board[from];
+    const castle = opts.castle ? { w: { ...opts.castle.w }, b: { ...opts.castle.b } } : null;
+    if (castle) {
+      for (const s of [from, to]) {
+        if (s === 'e1') castle.w = { k: false, q: false };
+        if (s === 'e8') castle.b = { k: false, q: false };
+        if (s === 'h1') castle.w.k = false;
+        if (s === 'a1') castle.w.q = false;
+        if (s === 'h8') castle.b.k = false;
+        if (s === 'a8') castle.b.q = false;
+      }
+    }
+    let ep = null;
+    if (piece && kindOf(piece) === 'P' && from[0] === to[0] && Math.abs(Number(from[1]) - Number(to[1])) === 2) {
+      ep = from[0] + String((Number(from[1]) + Number(to[1])) / 2);
+    }
+    return { ...opts, castle, ep };
   }
 
   function allLegalMoves(board, color, opts = {}) {
@@ -679,19 +763,21 @@ const NS_CHESS = (() => {
   function pickMove(board, color, opts = {}, depth = 2) {
     const moves = allLegalMoves(board, color, opts);
     if (!moves.length) return null;
+    // 読みの中ではキャスリング権／アンパッサンを追跡しないので外しておく
+    const inner = { ...opts, castle: null, ep: null };
     const score = (b, me) => {
       let s = 0;
       for (const p of Object.values(b)) s += (colorOf(p) === me ? 1 : -1) * PIECE_VALUE[kindOf(p)];
       return s;
     };
     const search = (b, turn, d, alpha, beta) => {
-      const ms = allLegalMoves(b, turn, opts);
-      if (!ms.length) return inCheck(b, turn, opts) ? (turn === color ? -999 : 999) : 0;
-      if (d === 0) return score(b, color);
+      if (d === 0) return score(b, color);   // 末端では合法手を作らない（重いので）
+      const ms = allLegalMoves(b, turn, inner);
+      if (!ms.length) return inCheck(b, turn, inner) ? (turn === color ? -999 - d : 999 + d) : 0;
       if (turn === color) {
         let best = -Infinity;
         for (const m of ms) {
-          best = Math.max(best, search(applyMove(b, m.from, m.to, opts), turn === 'w' ? 'b' : 'w', d - 1, alpha, beta));
+          best = Math.max(best, search(applyMove(b, m.from, m.to, inner), turn === 'w' ? 'b' : 'w', d - 1, alpha, beta));
           alpha = Math.max(alpha, best);
           if (beta <= alpha) break;
         }
@@ -699,7 +785,7 @@ const NS_CHESS = (() => {
       }
       let best = Infinity;
       for (const m of ms) {
-        best = Math.min(best, search(applyMove(b, m.from, m.to, opts), turn === 'w' ? 'b' : 'w', d - 1, alpha, beta));
+        best = Math.min(best, search(applyMove(b, m.from, m.to, inner), turn === 'w' ? 'b' : 'w', d - 1, alpha, beta));
         beta = Math.min(beta, best);
         if (beta <= alpha) break;
       }
@@ -724,7 +810,14 @@ const NS_CHESS = (() => {
     return b;
   })();
 
-  return { FILES, RANKS, PIECE_JA, PIECE_VALUE, sq, idx, onBoard, colorOf, kindOf, squaresOf, pseudoMoves, findKing, isAttacked, inCheck, applyMove, legalMoves, allLegalMoves, gameStatus, findMateIn1, captureMoves, solitaireSolvable, pickMove, START_POSITION };
+  /** 駒の組み合わせ的に、もう誰もチェックメイトできない（K対K、K＋小駒1枚対K） */
+  function insufficientMaterial(board) {
+    const rest = Object.values(board).filter((p) => kindOf(p) !== 'K');
+    if (!rest.length) return true;
+    return rest.length === 1 && ['N', 'B'].includes(kindOf(rest[0]));
+  }
+
+  return { FILES, RANKS, PIECE_JA, PIECE_VALUE, sq, idx, onBoard, colorOf, kindOf, squaresOf, pseudoMoves, attacks, findKing, isAttacked, inCheck, applyMove, legalMoves, castleMoves, nextRights, allLegalMoves, gameStatus, findMateIn1, captureMoves, solitaireSolvable, pickMove, insufficientMaterial, START_POSITION };
 })();
 
 // ── js/games/shogi.js ───────────────────────────────────────
@@ -826,10 +919,33 @@ const NS_SHOGI = (() => {
     return null;
   }
 
+  /**
+   * target に byColor の駒が利いているか。
+   * 全部の駒の行き先を作るのではなく、target から逆向きにたどる（読みの速さに直結する）。
+   */
   function isAttacked(board, target, byColor, sh = BIG) {
-    for (const [s, p] of Object.entries(board)) {
-      if (colorOf(p) !== byColor) continue;
-      if (pseudoMoves(board, s, sh).includes(target)) return true;
+    const [tf, tr] = idx(target);
+    const sign = byColor === 'b' ? 1 : -1;
+    for (const kind of Object.keys(STEP)) {
+      for (const [df, dr] of STEP[kind]) {
+        const f = tf - df * sign, r = tr - dr * sign;
+        if (!inside(f, r, sh)) continue;
+        const p = board[sq(f, r)];
+        if (p && colorOf(p) === byColor && kindOf(p) === kind) return true;
+      }
+    }
+    for (const kind of Object.keys(SLIDE)) {
+      for (const [df, dr] of SLIDE[kind]) {
+        let f = tf - df * sign, r = tr - dr * sign;
+        while (inside(f, r, sh)) {
+          const p = board[sq(f, r)];
+          if (p) {
+            if (colorOf(p) === byColor && kindOf(p) === kind) return true;
+            break;
+          }
+          f -= df * sign; r -= dr * sign;
+        }
+      }
     }
     return false;
   }
@@ -903,14 +1019,20 @@ const NS_SHOGI = (() => {
         if (baseOf(p) === 'P' && !isPromoted(p) && colorOf(p) === c) pawnFiles.add(idx(s)[0]);
       }
     }
+    // 打つ手は自玉の利きを開けないので、王手されていなければ「王手放置」の確認は要らない
+    const checked = inCheck(state.board, c, sh);
+    // 打ち歩詰めになりうるのは、相手玉の真正面に打つときだけ
+    const foeKing = kind === 'P' ? findKing(state.board, opponent(c)) : null;
+    const pawnCheckSq = foeKing
+      ? sq(idx(foeKing)[0], idx(foeKing)[1] + (c === 'b' ? 1 : -1)) : null;
     for (const s of squaresOf(sh)) {
       if (state.board[s]) continue;
       const [f] = idx(s);
       if (kind === 'P' && pawnFiles.has(f)) continue;               // 二歩
       if (mustPromote(cased(kind, c), s, sh)) continue;             // 行き所のない駒
-      const next = applyMove(state, { drop: kind, to: s }, sh);
-      if (inCheck(next.board, c, sh)) continue;                     // 自玉が王手のまま
-      if (kind === 'P' && isMate(next, sh)) continue;               // 打ち歩詰め
+      const next = checked || s === pawnCheckSq ? applyMove(state, { drop: kind, to: s }, sh) : null;
+      if (checked && inCheck(next.board, c, sh)) continue;          // 自玉が王手のまま
+      if (s === pawnCheckSq && isMate(next, sh)) continue;          // 打ち歩詰め
       out.push(s);
     }
     return out;
@@ -963,9 +1085,9 @@ const NS_SHOGI = (() => {
       return s;
     };
     const search = (st, d, alpha, beta) => {
+      if (d === 0) return score(st);   // 末端では合法手を作らない（持ち駒があると非常に重い）
       const ms = allLegalMoves(st, sh);
-      if (!ms.length) return st.turn === me ? -9999 : 9999;
-      if (d === 0) return score(st);
+      if (!ms.length) return st.turn === me ? -9999 - d : 9999 + d;
       if (st.turn === me) {
         let best = -Infinity;
         for (const m of ms) {
@@ -1004,11 +1126,11 @@ const NS_SHOGI = (() => {
     b['22'] = 'b'; b['82'] = 'r'; b['88'] = 'B'; b['28'] = 'R';
     return { board: b, hands: emptyHands(), turn: 'b' };
   }
-  /** 5五将棋: 玉金銀角飛歩 */
+  /** 5五将棋: 玉金銀角飛歩（標準の初期配置。先後は点対称） */
   function startGogo() {
     const b = {
-      '11': 'r', '21': 'b', '31': 's', '41': 'g', '51': 'k', '52': 'p',
-      '55': 'K', '45': 'G', '35': 'S', '25': 'B', '15': 'R', '14': 'P',
+      '51': 'r', '41': 'b', '31': 's', '21': 'g', '11': 'k', '12': 'p',
+      '55': 'K', '45': 'G', '35': 'S', '25': 'B', '15': 'R', '54': 'P',
     };
     return { board: b, hands: emptyHands(), turn: 'b' };
   }
@@ -1016,7 +1138,7 @@ const NS_SHOGI = (() => {
   function startMini() {
     const b = {
       '11': 'g', '21': 'k', '31': 's', '22': 'p',
-      '13': 'P', '14': 'S', '24': 'K', '34': 'G',
+      '23': 'P', '14': 'S', '24': 'K', '34': 'G',
     };
     return { board: b, hands: emptyHands(), turn: 'b' };
   }
@@ -1268,32 +1390,56 @@ const NS_MAHJONG = (() => {
 
   /**
    * 成立する役を判定する（入門レッスンで扱う範囲）
-   * ctx: { riichi, tsumo, menzen, seatWind: 'z1'.., roundWind: 'z1'.., winTile }
+   * tiles は手の中の牌（あがり牌を含む）。鳴いた面子は ctx.melds に [['z7','z7','z7'], ...] で渡す。
+   * ctx: { riichi, tsumo, menzen, seatWind: 'z1'.., roundWind: 'z1'.., winTile, melds }
    */
   function judgeYaku(tiles, ctx = {}) {
     const out = [];
-    const menzen = ctx.menzen !== false;
-    if (!isWin(tiles)) return out;
+    const melds = ctx.melds || [];
+    const sets = 4 - melds.length;
+    const menzen = ctx.menzen !== false && !melds.length;
+    if (!isWin(tiles, sets)) return out;
+    const all = [...tiles, ...melds.flat()];
     if (ctx.riichi && menzen) out.push('riichi');
     if (ctx.tsumo && menzen) out.push('tsumo');
-    if (!tiles.some(isYaochu)) out.push('tanyao');
-    if (isChiitoi(tiles)) out.push('chiitoi');
+    if (!all.some(isYaochu)) out.push('tanyao');          // 喰いタンあり
+    if (sets === 4 && isChiitoi(tiles)) out.push('chiitoi');
+    if (countYakuhai(tiles, ctx) > 0) out.push('yakuhai');
 
-    const yakuhaiTiles = new Set(['z5', 'z6', 'z7', ctx.seatWind, ctx.roundWind].filter(Boolean));
-    const decs = decompose(tiles);
-    if (decs.some((d) => d.sets.some((s) => s[0] === s[1] && s[1] === s[2] && yakuhaiTiles.has(s[0])))) {
-      out.push('yakuhai');
-    }
     if (menzen && ctx.winTile) {
-      const t13 = [...tiles];
-      t13.splice(t13.indexOf(ctx.winTile), 1);
-      const pinfuOk = decs.some((d) =>
+      const yakuhaiTiles = yakuhaiSet(ctx);
+      // 同じ分け方の中で「順子だけ・役牌でない雀頭・あがり牌が両面の片側」を満たすか
+      const pinfuOk = decompose(tiles, sets).some((d) =>
         d.sets.every((s) => s[0] !== s[1]) &&
         !yakuhaiTiles.has(d.pair) &&
-        waitType(t13, ctx.winTile).includes('ryanmen'));
+        d.sets.some((s) => {
+          const pos = s.indexOf(ctx.winTile);
+          if (pos < 0) return false;
+          const lo = Number(s[0][1]);
+          return (pos === 0 && lo !== 7) || (pos === 2 && lo !== 1);
+        }));
       if (pinfuOk) out.push('pinfu');
     }
     return [...new Set(out)];
+  }
+
+  const yakuhaiSet = (ctx) => new Set(['z5', 'z6', 'z7', ctx.seatWind, ctx.roundWind].filter(Boolean));
+
+  /** 役牌の翻数（刻子1つにつき1翻。連風牌は2翻）。鳴いた刻子・槓子も数える */
+  function countYakuhai(tiles, ctx = {}) {
+    const melds = ctx.melds || [];
+    const sets = 4 - melds.length;
+    const han = (t) => ['z5', 'z6', 'z7'].includes(t) ? 1
+      : (t === ctx.seatWind ? 1 : 0) + (t === ctx.roundWind ? 1 : 0);
+    let fromMelds = 0;
+    for (const m of melds) if (m[0] === m[1] && m[1] === m[2]) fromMelds += han(m[0]);
+    let best = 0;
+    for (const d of decompose(tiles, sets)) {
+      let n = 0;
+      for (const s of d.sets) if (s[0] === s[1] && s[1] === s[2]) n += han(s[0]);
+      best = Math.max(best, n);
+    }
+    return fromMelds + best;
   }
 
   const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
@@ -1348,15 +1494,16 @@ const NS_MAHJONG = (() => {
       const w = waits(t13, sets);
       if (!w.length) continue;
       if (waitTypes) {
-        const types = waitType(t13, winTile, sets);
-        if (!types.length || !types.every((t) => waitTypes.includes(t))) continue;
+        // 待ち牌すべてについて形を調べる（1枚だけ見ると、別の形の待ちが混ざる）
+        const types = new Set(w.flatMap((t) => waitType(t13, t, sets)));
+        if (!types.size || ![...types].every((t) => waitTypes.includes(t))) continue;
       }
       return { tiles: sortTiles(t13), waits: w, winTile };
     }
     return null;
   }
 
-  return { SUITS, SUIT_JA, SUIT_YOMI, HONOR_JA, HONOR_YOMI, NUM_YOMI, ALL_TILES, toIndex, fromIndex, isHonor, isTerminal, isYaochu, tileName, tileYomi, toCounts, fromCounts, sortTiles, makeWall, decompose, isAgari, isChiitoi, isKokushi, isWin, waits, isTenpai, WAIT_TYPES, waitType, shanten, YAKU_JA, judgeYaku, randomWinHand, randomTenpai };
+  return { SUITS, SUIT_JA, SUIT_YOMI, HONOR_JA, HONOR_YOMI, NUM_YOMI, ALL_TILES, toIndex, fromIndex, isHonor, isTerminal, isYaochu, tileName, tileYomi, toCounts, fromCounts, sortTiles, makeWall, decompose, isAgari, isChiitoi, isKokushi, isWin, waits, isTenpai, WAIT_TYPES, waitType, shanten, YAKU_JA, judgeYaku, countYakuhai, randomWinHand, randomTenpai };
 })();
 
 // ── js/games/mahjong4.js ────────────────────────────────────
@@ -1389,12 +1536,13 @@ const NS_MJ4 = (() => {
     const row = BASE.find((r) => han <= r[0]) || BASE[BASE.length - 1];
     return isOya ? row[2] : row[1];
   }
+  // 符を数えない簡易表なので、4翻は満貫として扱う（点数表と表示をそろえる）
   function scoreLabel(han) {
     if (han >= 13) return '役満';
     if (han >= 11) return '三倍満';
     if (han >= 8) return '倍満';
     if (han >= 6) return '跳満';
-    if (han >= 5) return '満貫';
+    if (han >= 4) return '満貫';
     return `${han}翻`;
   }
 
@@ -1424,6 +1572,12 @@ const NS_MJ4 = (() => {
       this.riichi = [false, false, false, false];
       this.riichiAt = [-1, -1, -1, -1];
       this.ippatsu = [false, false, false, false];
+      this.tempFuriten = [false, false, false, false];   // 見逃し（次に自分が切るまで）
+      this.riichiFuriten = [false, false, false, false]; // リーチ後の見逃し（局の終わりまで）
+      // 「やり直す」で局の途中から戻すときのために、配牌時点の点棒を覚えておく
+      this.startScores = [...this.scores];
+      this.startSticks = this.riichiSticks;
+      this.lastDiscard = null;
       this.turn = this.oya;
       this.drawn = null;      // いまツモった牌
       this.phase = 'draw';    // draw | discard | call | end
@@ -1448,11 +1602,18 @@ const NS_MJ4 = (() => {
       if (s === 'z') return n <= 4 ? `z${(n % 4) + 1}` : `z${((n - 5 + 1) % 3) + 5}`;
       return `${s}${(n % 9) + 1}`;
     }
-    doraCount(p) {
+    /** extra にあがり牌を渡すと、それも数える */
+    doraCount(p, extra = null) {
       const d = this.doraTile();
       if (!d) return 0;
-      const all = [...this.hands[p], ...this.melds[p].flatMap((m) => m.tiles)];
+      const all = [...this.hands[p], ...this.melds[p].flatMap((m) => m.tiles), ...(extra ? [extra] : [])];
       return all.filter((t) => t === d).length;
+    }
+
+    /** 局の途中でやり直すとき、点棒と供託を配牌時点に戻す */
+    rollback() {
+      if (this.startScores) this.scores = [...this.startScores];
+      this.riichiSticks = this.startSticks ?? this.riichiSticks;
     }
 
     /** 手の中で使える面子の数（鳴いた分を引く） */
@@ -1488,6 +1649,7 @@ const NS_MJ4 = (() => {
     riichiOptions(p = this.turn) {
       if (this.riichi[p] || this.melds[p].length || this.scores[p] < 1000) return [];
       if (p !== this.turn || !this.drawn) return [];
+      if (this.wall.length < 4) return [];   // 残りツモが1巡ないとリーチできない
       const hand = this.fullHand(p);
       const out = [];
       for (const t of new Set(hand)) {
@@ -1498,8 +1660,9 @@ const NS_MJ4 = (() => {
       return out;
     }
 
-    /** フリテンか（自分の捨て牌に自分の待ちが含まれる） */
+    /** フリテンか（自分の捨て牌に待ちがある／見逃した直後／リーチ後に見逃した） */
     isFuriten(p) {
+      if (this.tempFuriten[p] || this.riichiFuriten[p]) return true;
       const hand = M.sortTiles(this.hands[p]);
       const w = M.waits(hand, this.setsNeeded(p));
       if (!w.length) return false;
@@ -1510,10 +1673,13 @@ const NS_MJ4 = (() => {
     discard(tile, { riichi = false } = {}) {
       if (this.phase !== 'discard') return;
       const p = this.turn;
+      // リーチ後はツモ切りしかできない
+      if (this.riichi[p] && this.drawn && tile !== this.drawn) return;
       const hand = this.fullHand(p);
       const i = hand.indexOf(tile);
       if (i < 0) return;
       hand.splice(i, 1);
+      this.tempFuriten[p] = false;   // 同巡内フリテンは自分が切れば解ける
       this.hands[p] = hand;
       this.drawn = null;
       if (riichi) {
@@ -1573,10 +1739,15 @@ const NS_MJ4 = (() => {
     /** 誰も鳴かない／ロンしないとき、次の人へ */
     passCalls() {
       if (this.phase !== 'call') return;
+      // ロンできたのに見送った人はフリテンになる
+      for (const c of this.pending || []) {
+        if (c.type !== 'ron') continue;
+        this.tempFuriten[c.p] = true;
+        if (this.riichi[c.p]) this.riichiFuriten[c.p] = true;
+      }
       this.pending = null;
       this.turn = (this.lastDiscard.p + 1) % 4;
-      // 一発は一巡で消える
-      for (let i = 0; i < 4; i++) if (this.riichi[i] && i !== this.lastDiscard.p) this.ippatsu[i] = false;
+      // 一発は「リーチした人が次に切るまで」と「誰かが鳴くまで」。ここでは消さない
       this.phase = 'draw';
     }
 
@@ -1616,15 +1787,19 @@ const NS_MJ4 = (() => {
       const hand = tsumo ? this.fullHand(p) : M.sortTiles([...this.hands[p], winTile]);
       const menzen = this.melds[p].length === 0;
       const concealed = M.isWin(hand, this.setsNeeded(p));
-      if (!concealed) return { han: 0, list: [] };
-      const list = M.judgeYaku(hand, {
+      if (!concealed) return { han: 0, list: [], extras: [], dora: 0 };
+      const yctx = {
         riichi: this.riichi[p], tsumo, menzen,
         seatWind: this.seatWind(p), roundWind: this.roundWind(), winTile,
-      });
-      let han = list.reduce((a, k) => a + (M.YAKU_JA[k]?.han || 0), 0);
+        melds: this.melds[p].map((m) => m.tiles),
+      };
+      const list = M.judgeYaku(hand, yctx);
+      // 役牌は刻子の数だけ（連風牌は2翻）。それ以外は表の翻数
+      let han = list.reduce((a, k) => a + (k === 'yakuhai' ? M.countYakuhai(hand, yctx) : (M.YAKU_JA[k]?.han || 0)), 0);
       const extras = [];
       if (this.ippatsu[p] && this.riichi[p]) { han += 1; extras.push('一発'); }
-      const dora = this.doraCount(p);
+      // hand は手の中の牌＋あがり牌。ロンのあがり牌も tsumo のツモ牌も hands[p] には入っていない
+      const dora = this.doraCount(p, winTile);
       if (dora && han > 0) { han += dora; extras.push(`ドラ${dora}`); }
       return { han, list, extras, dora };
     }
@@ -1691,21 +1866,29 @@ const NS_MJ4 = (() => {
     /** 次の局へ。親が続くかどうかを返す */
     nextKyoku() {
       const r = this.result;
+      const draw = r?.kind === 'draw';
       const oyaWin = r?.kind === 'win' && r.winner === this.oya;
-      const oyaTenpai = r?.kind === 'draw' && r.tenpai[this.oya];
+      const oyaTenpai = draw && r.tenpai[this.oya];
       if (oyaWin || oyaTenpai) {
         this.honba++;
       } else {
-        this.honba = 0;
+        // 流局なら親が流れても本場は積む。子のあがりで0に戻る
+        this.honba = draw ? this.honba + 1 : 0;
         this.oya = (this.oya + 1) % 4;
         this.kyoku++;
         if (this.kyoku > 4) { this.kyoku = 1; this.round++; }
+      }
+      // 南4局が終わった／誰かの点棒がマイナス → 半荘終了
+      if (this.round >= 2 || this.scores.some((s) => s < 0)) {
+        this.over = true;
+        this.phase = 'over';
+        return this;
       }
       return this.deal();
     }
 
     kyokuLabel() {
-      return `${SEAT_JA[this.round]}${this.kyoku}局${this.honba ? ` ${this.honba}本場` : ''}`;
+      return `${SEAT_JA[Math.min(this.round, 3)]}${this.kyoku}局${this.honba ? ` ${this.honba}本場` : ''}`;
     }
   }
 
@@ -1908,7 +2091,8 @@ const NS_COACH = (() => {
       name: (p) => C.PIECE_JA[C.kindOf(p)],
       isKing: (p) => C.kindOf(p) === 'K',
       foe: (c) => (c === 'w' ? 'b' : 'w'),
-      reach: (board, from, ctx) => C.pseudoMoves(board, from, { ...ctx, anyColor: true }),
+      // 「利き」。ポーンの前進は攻撃ではないので C.attacks を使う
+      reach: (board, from, ctx) => C.attacks(board, from, ctx),
       moves: (board, from, ctx) => C.legalMoves(board, from, ctx),
       apply: (board, m, ctx) => C.applyMove(board, m.from, m.to, ctx),
       best: (board, color, ctx) => C.pickMove(board, color, ctx, 2),
@@ -1922,9 +2106,10 @@ const NS_COACH = (() => {
       isKing: (p) => S.baseOf(p) === 'K',
       foe: S.opponent,
       reach: (board, from, ctx) => S.pseudoMoves(board, from, ctx, { anyColor: true }),
-      moves: (board, from, ctx) =>
+      // 成り／不成で同じ行き先が2回出るので重複を消す
+      moves: (board, from, ctx) => [...new Set(
         S.legalMovesFrom({ board, hands: S.emptyHands(), turn: S.colorOf(board[from]) }, from, ctx)
-          .map((m) => m.to),
+          .map((m) => m.to))],
       apply: (board, m, ctx) => {
         const st = { board, hands: S.emptyHands(), turn: S.colorOf(board[m.from]) };
         return S.applyMove(st, { from: m.from, to: m.to, promote: false }, ctx).board;
@@ -1951,6 +2136,18 @@ const NS_COACH = (() => {
   }
 
   /**
+   * 実際に取りにこられる駒だけ。王・キングは、守られている駒は取れない（取ると自殺手になる）。
+   * defenders はそのマスを守っている側の駒。
+   */
+  function realAttackers(game, board, sq, byColor, ctx) {
+    const E = ENGINE[game];
+    const atk = attackers(game, board, sq, byColor, ctx);
+    if (!atk.some((a) => E.isKing(a.piece))) return atk;
+    const def = attackers(game, board, sq, E.foe(byColor), ctx);
+    return def.length ? atk.filter((a) => !E.isKing(a.piece)) : atk;
+  }
+
+  /**
    * 「取られたら損をする」自分の駒を探す。
    * 守りがゼロなら丸損、守りがあっても安い駒に狙われていれば差額ぶんの損。
    */
@@ -1959,7 +2156,7 @@ const NS_COACH = (() => {
     const out = [];
     for (const [sq, p] of Object.entries(board)) {
       if (E.colorOf(p) !== color || E.isKing(p)) continue;
-      const atk = attackers(game, board, sq, E.foe(color), ctx);
+      const atk = realAttackers(game, board, sq, E.foe(color), ctx);
       if (!atk.length) continue;
       const def = attackers(game, board, sq, color, ctx);
       const val = E.value(p);
@@ -1981,7 +2178,7 @@ const NS_COACH = (() => {
         const target = board[to];
         if (!target || E.colorOf(target) === color) continue;
         const after = E.apply(board, { from, to }, ctx);
-        const recapture = attackers(game, after, to, E.foe(color), ctx);
+        const recapture = realAttackers(game, after, to, E.foe(color), ctx);
         const gain = E.value(target) - (recapture.length ? E.value(p) : 0);
         if (gain > 0) {
           out.push({ from, to, gain, target: E.name(target), piece: E.name(p), safe: !recapture.length });
@@ -2006,7 +2203,7 @@ const NS_COACH = (() => {
           .map((sq) => ({ sq, piece: after[sq] }))
           .filter((x) => x.piece && E.colorOf(x.piece) === E.foe(color) && threatValue(x.piece) >= E.value(p));
         // 自分がそこで取られるなら両取りにならない
-        const punished = attackers(game, after, to, E.foe(color), ctx).length
+        const punished = realAttackers(game, after, to, E.foe(color), ctx).length
           && !attackers(game, after, to, color, ctx).length;
         if (hit.length >= 2 && !punished) {
           out.push({ from, to, targets: hit.map((x) => ({ sq: x.sq, name: E.name(x.piece) })) });
@@ -2014,66 +2211,6 @@ const NS_COACH = (() => {
       }
     }
     return out;
-  }
-
-  /**
-   * 1手の講評。
-   * before = 指す前の盤、after = 指した後の盤。
-   * 返り値 { level, lines } の level は ok / miss / blunder。
-   */
-  function reviewMove(game, before, after, move, color, ctx) {
-    const E = ENGINE[game];
-    const lines = [];
-    let level = 'ok';
-
-    // 指した後、自分の駒がタダになっていないか（これが最優先）
-    const hung = hanging(game, after, color, ctx);
-    if (hung.length) {
-      const h = hung[0];
-      level = h.loss >= 3 ? 'blunder' : 'miss';
-      lines.push({
-        kind: 'hang',
-        sq: h.sq,
-        text: h.sq === move.to
-          ? `いま動かした${h.name}が、${h.by.name}に取られる場所です。`
-          : `${E.square(h.sq)}の${h.name}が、${h.by.name}に取られる形になりました。`,
-        detail: h.defended ? '守ってはいますが、相手の方が安い駒なので取られ合うと損をします。' : 'この駒を守っている味方がいません。',
-      });
-    }
-
-    // 取れたのに取らなかった駒
-    const missed = freeCaptures(game, before, color, ctx)
-      .filter((m) => !(m.from === move.from && m.to === move.to));
-    if (missed.length && missed[0].gain >= 3) {
-      if (level === 'ok') level = 'miss';
-      lines.push({
-        kind: 'missed',
-        sq: missed[0].to,
-        text: `${E.square(missed[0].to)}の${missed[0].target}が取れました。`,
-        detail: missed[0].safe ? 'まったくの無防備でした。' : '取り返されても得になる形でした。',
-      });
-    }
-
-    // 相手が次にできる強い手
-    const theirs = freeCaptures(game, after, E.foe(color), ctx);
-    if (theirs.length && theirs[0].gain >= 3 && !hung.some((h) => h.sq === theirs[0].to)) {
-      lines.push({
-        kind: 'threat',
-        sq: theirs[0].to,
-        text: `相手は次に${E.square(theirs[0].to)}の${theirs[0].target}を狙えます。`,
-        detail: '',
-      });
-    }
-
-    if (!lines.length) {
-      const took = before[move.to];
-      lines.push({
-        kind: 'good',
-        text: took ? `${E.name(took)}を取って、取られる駒もありません。` : 'とられる駒はありません。',
-        detail: '',
-      });
-    }
-    return { level, lines };
   }
 
   // ───────────────────────────────────────────────
@@ -2122,46 +2259,6 @@ const NS_COACH = (() => {
     const mine = table.find((r) => r.tile === tile);
     return !!mine && mine.shanten === best.shanten && mine.tiles === best.tiles;
   }
-
-  /** ある牌を切ったときの講評 */
-  function reviewDiscard(hand, tile, sets = 4, seen = []) {
-    const table = ukeire(hand, sets, seen);
-    const best = table[0];
-    const mine = table.find((r) => r.tile === tile);
-    if (!mine) return { level: 'ok', lines: [] };
-
-    const sameShanten = mine.shanten === best.shanten;
-    const lossTiles = best.tiles - mine.tiles;
-    let level = 'ok';
-    const lines = [];
-
-    if (!sameShanten) {
-      level = 'blunder';
-      lines.push({
-        kind: 'shanten',
-        text: `${M.tileName(tile)}を切ると、アガリまでの距離が1つ遠くなります。`,
-        detail: `${M.tileName(best.tile)}なら${best.shanten === 0 ? 'テンパイのまま' : `あと${best.shanten}枚`}を保てました。`,
-      });
-    } else if (lossTiles >= 4) {
-      level = 'miss';
-      lines.push({
-        kind: 'narrow',
-        text: `${M.tileName(tile)}でも進みますが、受け入れが${lossTiles}枚せまくなります。`,
-        detail: `${M.tileName(best.tile)}なら${best.kinds}種${best.tiles}枚待てました（いまは${mine.kinds}種${mine.tiles}枚）。`,
-      });
-    } else {
-      const tied = mine.tiles === best.tiles && mine.tile !== best.tile;
-      lines.push({
-        kind: 'good',
-        text: mine.shanten === 0
-          ? `テンパイです。${mine.accept.map(M.tileName).join('・')}を待っています。`
-          : `いい切り方です。${mine.kinds}種${mine.tiles}枚を受け入れます。`,
-        detail: tied ? `${M.tileName(best.tile)}切りも同じ枚数です。どちらでも構いません。` : '',
-      });
-    }
-    return { level, lines, best, mine, table };
-  }
-
 
   // ───────────────────────────────────────────────
   // 講評の中身を厚くする
@@ -2256,10 +2353,32 @@ const NS_COACH = (() => {
    * reviewMove を「読んで分かる」形に組み立て直したもの。
    * 返り値の各 line は what / why / better / lesson を持つ。
    */
-  function explainMove(game, before, after, move, color, ctx) {
+  /** 実際に指した手で得た点数（取った駒 − 取り返されるなら自分の駒） */
+  function gainOfMove(game, before, after, move, color, ctx) {
+    const E = ENGINE[game];
+    const target = before[move.to];
+    if (!move.from || !target || E.colorOf(target) === color) return 0;
+    const recapture = realAttackers(game, after, move.to, E.foe(color), ctx);
+    return E.value(target) - (recapture.length ? E.value(before[move.from]) : 0);
+  }
+
+  /**
+   * info.mate = true なら、その手で相手を詰ませている（講評は「詰み」だけにする）。
+   * 詰ませた手で「駒が取られる場所です」と言うと、初心者は正解を悪手と覚えてしまう。
+   */
+  function explainMove(game, before, after, move, color, ctx, info = {}) {
     const E = ENGINE[game];
     const lines = [];
     let level = 'ok';
+
+    if (info.mate) {
+      return { level: 'ok', lines: [{
+        kind: 'good', sq: move.to,
+        what: '詰みです。',
+        why: '相手の玉（キング）に逃げ道も防ぐ手もありません。駒が取られるかどうかは、もう関係ありません。',
+        better: null, lesson: '', marks: {},
+      }] };
+    }
 
     const hung = hanging(game, after, color, ctx);
     if (hung.length) {
@@ -2281,16 +2400,20 @@ const NS_COACH = (() => {
       });
     }
 
+    // 同じ駒を取った手や、指した手より得の小さい取りは「取り逃がし」にしない
+    const played = gainOfMove(game, before, after, move, color, ctx);
     const missed = freeCaptures(game, before, color, ctx)
-      .filter((m) => !(m.from === move.from && m.to === move.to));
+      .filter((m) => m.to !== move.to && m.gain > played);
     if (missed.length) {
       const m = missed[0];
       // 駒（3点以上）の取り逃がしは警告、歩1枚ぶんは「ついでに一言」程度に留める
-      if (m.gain >= 3 && level === 'ok') level = 'miss';
+      if (m.gain - played >= 3 && level === 'ok') level = 'miss';
       lines.push({
         kind: 'missed',
         sq: m.to,
-        what: `${E.square(m.to)}の${m.target}が、タダで取れる場面でした。`,
+        what: m.safe
+          ? `${E.square(m.to)}の${m.target}が、タダで取れる場面でした。`
+          : `${E.square(m.to)}の${m.target}を取れば、得をする場面でした。`,
         why: m.safe
           ? `あの${m.target}は誰にも守られていませんでした。${m.gain}点をただでもらえるところです。`
           : `取り返されても、差し引き${m.gain}点の得になる形でした。`,
@@ -2315,7 +2438,7 @@ const NS_COACH = (() => {
     }
 
     if (!lines.length) {
-      const took = before[move.to];
+      const took = move.from && before[move.to] && E.colorOf(before[move.to]) !== color ? before[move.to] : null;
       // 良い手のときこそ「次に何を見るか」を言う。ここが抜けると手が続かない
       const nowHits = E.reach(after, move.to, ctx)
         .map((sq) => ({ sq, piece: after[sq] }))
@@ -2364,8 +2487,8 @@ const NS_COACH = (() => {
       lines.push({
         kind: 'shanten',
         what: `${M.tileName(tile)}切りは、アガリまでの距離が1つ遠くなる切り方です。`,
-        why: `${M.tileName(tile)}は、すでにできている組の一部でした。`
-          + `${M.tileName(best.tile)}を切っていれば${best.shanten === 0 ? 'テンパイのまま保てました' : `あと${best.shanten}枚の状態を保てました`}。`,
+        why: `${M.tileName(tile)}は、手の中の組（またはその候補）に使われていました。`
+          + `${M.tileName(best.tile)}を切っていれば${best.shanten === 0 ? 'テンパイのまま保てました' : `テンパイまであと${best.shanten}枚の状態を保てました`}。`,
         better: { tile: best.tile, label: `${M.tileName(best.tile)}切り`,
           reason: `${best.kinds}種${best.tiles}枚を受け入れます。` },
         lesson: '切る前に、その牌が「もう組の一部になっていないか」を確かめる。組を壊す切り方がいちばん大きな損です。',
@@ -2450,7 +2573,7 @@ const NS_COACH = (() => {
     });
   }
 
-  return { attackers, hanging, freeCaptures, forks, reviewMove, ukeire, tiedWithBest, reviewDiscard, suggestBetter, explainMove, explainDiscard, moveMarks, isolated };
+  return { attackers, realAttackers, hanging, freeCaptures, forks, ukeire, tiedWithBest, suggestBetter, explainMove, explainDiscard, moveMarks, isolated, gainOfMove };
 })();
 
 // ── js/core/goals.js ────────────────────────────────────────
@@ -2490,12 +2613,22 @@ const NS_GOALS = (() => {
         if (!piece) return null;           // 盤面と手が食い違っていたら黙って見送る
         const kind = C.kindOf(piece);
 
+        // キャスリング（キングが2マス横へ）
+        if (kind === 'K' && Math.abs(C.FILES.indexOf(move.from[0]) - C.FILES.indexOf(move.to[0])) === 2) {
+          return {
+            kind: 'goal', ok: true,
+            what: 'キャスリングしました。キングが隅に隠れ、ルークも中央へ出てきました。',
+            why: '', lesson: '',
+          };
+        }
+
         // 同じ駒を2回以上動かしていないか
-        const moved = history.filter((h) => h.move && h.move.to === move.from).length;
-        if (moved >= 1 && ply <= 16 && kind !== 'K') {
+        // history には自分の手だけが入っている。いま指した手は除いて数える
+        const moved = history.filter((h) => h.move && h.move !== move && h.move.to === move.from).length;
+        if (moved >= 1 && ply <= 16 && kind !== 'K' && !before[move.to]) {
           return {
             kind: 'goal', ok: false,
-            what: `序盤にこの${C.PIECE_JA[kind]}を動かすのは2回目です。`,
+            what: `序盤にこの${C.PIECE_JA[kind]}を動かすのは${moved + 1}回目です。`,
             why: '序盤は「1手で1枚ずつ前に出す」競争です。1枚を2回動かす間に、相手は2枚を働かせています。',
             lesson: 'まだ初期位置から一度も動いていない駒がないか、先に探してみてください。',
           };
@@ -2649,7 +2782,11 @@ const NS_GOALS = (() => {
             why: '', lesson: '',
           };
         }
-        const order = (t) => (M.isHonor(t) ? 0 : M.isTerminal(t) ? 1 : 2);
+        const order = (t) => {
+          if (M.isHonor(t)) return 0;
+          const n = Number(t[1]);
+          return n === 1 || n === 9 ? 1 : n === 2 || n === 8 ? 2 : 3;
+        };
         const first = [...lone].sort((a, b) => order(a) - order(b))[0];
         return {
           kind: 'goal', ok: false,
@@ -2668,6 +2805,14 @@ const NS_GOALS = (() => {
         const best = table[0];
         const mine = table.find((r) => r.tile === tile);
         if (!mine || !best) return null;
+        if (mine.shanten > best.shanten) {
+          return {
+            kind: 'goal', ok: false,
+            what: `${M.tileName(tile)}切りで、テンパイから1歩遠ざかりました。`,
+            why: 'できている組や両面を崩すと、受け入れの枚数より先に「あと何枚」が悪くなります。',
+            lesson: '切る前に、その牌がすでに組や両面の一部になっていないかを確かめます。',
+          };
+        }
         if (mine.tiles >= best.tiles) {
           return { kind: 'goal', ok: true, what: '受け入れをいちばん広く保てています。', why: '', lesson: '' };
         }
@@ -2715,7 +2860,8 @@ const NS_BOARD = (() => {
   const CRANKS = ['1', '2', '3', '4', '5', '6', '7', '8'];
 
   // 白黒どちらも塗りつぶしグリフを使い、色と輪郭で描き分ける（書体差に強い）
-  const CHESS_GLYPH = { K: '♚', Q: '♛', R: '♜', B: '♝', N: '♞', P: '♟' };
+  // U+FE0E を付けて「文字として描く」ことを指定する（iOSなどで♟が絵文字になり、色が付かないのを防ぐ）
+  const CHESS_GLYPH = { K: '♚\uFE0E', Q: '♛\uFE0E', R: '♜\uFE0E', B: '♝\uFE0E', N: '♞\uFE0E', P: '♟\uFE0E' };
 
   const LAYOUT = {
     chess: (w, h) => ({
@@ -2792,7 +2938,8 @@ const NS_BOARD = (() => {
           const key = this.L.key(col, row);
           const [sc, sr] = this._screen(col, row);
           const x = pad + sc * CELL, y = pad + sr * CELL;
-          const isDark = (col + row) % 2 === 1;
+          // a1 が必ず黒マスになるように、盤の大きさではなく座標から色を決める
+          const isDark = (col + (this.h - 1 - row)) % 2 === 0;
           const fill = this.variant === 'chess' ? (isDark ? dark : light) : light;
           parts.push(
             `<rect class="sq" data-sq="${key}" x="${x}" y="${y}" width="${CELL}" height="${CELL}" fill="${fill}"/>`
@@ -2805,8 +2952,9 @@ const NS_BOARD = (() => {
 
       // 星（将棋の9×9のみ）
       if (this.variant === 'shogi' && this.w === 9 && this.h === 9) {
+        // 星はマスではなく線の交点にある。反転時は交点を w−c / h−r で映す
         for (const [c, r] of [[3, 3], [6, 3], [3, 6], [6, 6]]) {
-          const [sc, sr] = this._screen(c, r);
+          const [sc, sr] = this.flipped ? [this.w - c, this.h - r] : [c, r];
           parts.push(`<circle cx="${pad + sc * CELL}" cy="${pad + sr * CELL}" r="5" fill="#6b5326" pointer-events="none"/>`);
         }
       }
@@ -2814,7 +2962,7 @@ const NS_BOARD = (() => {
       // マーク（下敷き）
       for (const [key, kind] of Object.entries(this.marks)) {
         const cr = this.L.colRow(key);
-        if (cr[0] < 0) continue;
+        if (cr[0] < 0 || cr[0] >= this.w || cr[1] < 0 || cr[1] >= this.h) continue;
         const [sc, sr] = this._screen(cr[0], cr[1]);
         const x = pad + sc * CELL, y = pad + sr * CELL;
         parts.push(this._mark(kind, x, y, !!this.position[key]));
@@ -3107,7 +3255,7 @@ const NS_FBCONF = (() => {
   };
   */
 
-  return { firebaseConfig, firebaseConfig };
+  return { firebaseConfig };
 })();
 
 // ── js/core/firebase-sync.js ────────────────────────────────
@@ -3242,24 +3390,46 @@ const NS_STORE = (() => {
     v: 1,
     lessons: {},                 // id -> { done, correct, total, at }
     streak: { last: null, count: 0, best: 0 },
-    reviews: {},                 // id -> { due, miss }
+    reviews: {},                 // "lessonId#step" -> { due, miss, at } / 解いたら { cleared: true, at }
+    resetAt: 0,                  // 「進捗をすべて消す」をした時刻。これより古い記録は他の端末から来ても捨てる
     updatedAt: 0,
   });
 
+  /** 欠けた項目を補う（古い形式や壊れたデータを読んでも落ちないように） */
+  const normalize = (s) => {
+    const e = emptyState();
+    if (!s || typeof s !== 'object') return e;
+    return {
+      ...e, ...s,
+      lessons: s.lessons && typeof s.lessons === 'object' ? s.lessons : {},
+      reviews: s.reviews && typeof s.reviews === 'object' ? s.reviews : {},
+      streak: { ...e.streak, ...(s.streak || {}) },
+    };
+  };
+
+  /**
+   * 2つの状態を合わせる。項目ごとに新しい方を採用する。
+   * 削除は「消した」という記録（cleared / resetAt）で伝える。単純な和集合だと、消したものが別の端末から戻ってくる。
+   */
   function mergeStates(a, b) {
-    const A = a || emptyState(), B = b || emptyState();
+    const A = normalize(a), B = normalize(b);
     const out = emptyState();
+    out.resetAt = Math.max(A.resetAt || 0, B.resetAt || 0);
+    const alive = (rec) => rec && (rec.at || 0) >= out.resetAt;
     for (const id of new Set([...Object.keys(A.lessons), ...Object.keys(B.lessons)])) {
-      const x = A.lessons[id], y = B.lessons[id];
-      if (!x) out.lessons[id] = y;
-      else if (!y) out.lessons[id] = x;
-      else out.lessons[id] = (y.at || 0) > (x.at || 0) ? y : x;
+      const x = alive(A.lessons[id]) ? A.lessons[id] : null;
+      const y = alive(B.lessons[id]) ? B.lessons[id] : null;
+      const pick = !x ? y : !y ? x : (y.at || 0) > (x.at || 0) ? y : x;
+      if (pick) out.lessons[id] = pick;
     }
     for (const id of new Set([...Object.keys(A.reviews), ...Object.keys(B.reviews)])) {
-      const x = A.reviews[id], y = B.reviews[id];
-      out.reviews[id] = !x ? y : !y ? x : (y.due || 0) > (x.due || 0) ? y : x;
+      const x = alive(A.reviews[id]) ? A.reviews[id] : null;
+      const y = alive(B.reviews[id]) ? B.reviews[id] : null;
+      const pick = !x ? y : !y ? x : (y.at || 0) > (x.at || 0) ? y : x;
+      if (pick) out.reviews[id] = pick;
     }
-    const sa = A.streak, sb = B.streak;
+    const sa = (A.updatedAt || 0) >= out.resetAt ? A.streak : emptyState().streak;
+    const sb = (B.updatedAt || 0) >= out.resetAt ? B.streak : emptyState().streak;
     out.streak = (sb.last || '') > (sa.last || '') ? { ...sb } : { ...sa };
     out.streak.best = Math.max(sa.best || 0, sb.best || 0);
     out.updatedAt = Math.max(A.updatedAt || 0, B.updatedAt || 0);
@@ -3336,12 +3506,22 @@ const NS_STORE = (() => {
     recordMiss(lessonId, stepKey) {
       return this.update((s) => {
         const k = `${lessonId}#${stepKey}`;
-        const prev = s.reviews[k] || { miss: 0 };
-        s.reviews[k] = { miss: (prev.miss || 0) + 1, due: Date.now() + 864e5 };
+        const prev = s.reviews[k] && !s.reviews[k].cleared ? s.reviews[k] : { miss: 0 };
+        s.reviews[k] = { miss: (prev.miss || 0) + 1, due: Date.now() + 864e5, at: Date.now() };
       });
     }
+    /** 復習が残っているときだけ消す（毎問の書き込みを避ける） */
     clearReview(lessonId, stepKey) {
-      return this.update((s) => { delete s.reviews[`${lessonId}#${stepKey}`]; });
+      const k = `${lessonId}#${stepKey}`;
+      const r = this.state.reviews[k];
+      if (!r || r.cleared) return this.state;
+      return this.update((s) => { s.reviews[k] = { cleared: true, at: Date.now() }; });
+    }
+    /** まだ解き直していない問題（期限が来ていないものも含む） */
+    pendingReviews(prefix = '') {
+      return Object.entries(this.state.reviews)
+        .filter(([k, r]) => r && !r.cleared && k.startsWith(prefix))
+        .map(([k, r]) => ({ key: k, lessonId: k.split('#')[0], step: Number(k.split('#')[1]), ...r }));
     }
     _touchStreak(s) {
       const d = today();
@@ -3355,6 +3535,8 @@ const NS_STORE = (() => {
     isDone(id) { return !!this.state.lessons[id]?.done; }
     reset() {
       this.state = emptyState();
+      this.state.resetAt = Date.now();
+      this.state.updatedAt = this.state.resetAt;
       this._writeLocal();
       this.sync.push(this.state);
       this._emit();
@@ -3363,7 +3545,11 @@ const NS_STORE = (() => {
     // --- 引き継ぎコード（Firebase を使わない／使えないときの逃げ道） --------
     exportCode() {
       const json = JSON.stringify(this.state);
-      return btoa(String.fromCharCode(...new TextEncoder().encode(json)));
+      // 大きな配列を一度に展開すると引数の上限を超えるので、少しずつ文字にする
+      const bytes = new TextEncoder().encode(json);
+      let bin = '';
+      for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      return btoa(bin);
     }
     importCode(code) {
       const json = new TextDecoder().decode(
@@ -3423,7 +3609,7 @@ const NS_MJAI = (() => {
 
   /**
    * 降りるべきか。判断はできるだけ単純にする。
-   * 「誰かがリーチ」かつ「自分の手があと2枚以上必要」なら降りる。
+   * 「誰かがリーチ」かつ「自分の手がテンパイまであと2枚以上」なら降りる。
    */
   function shouldFold(game, me) {
     const threats = riichiPlayers(game, me);
@@ -3447,6 +3633,8 @@ const NS_MJAI = (() => {
   /** CPUの1手。教科書どおりに打つ */
   function cpuTurn(game, me) {
     if (game.canTsumo(me)) return { action: 'tsumo' };
+    // リーチ後はツモ切りしかできない
+    if (game.riichi[me] && game.drawn) return { action: 'discard', tile: game.drawn };
 
     if (shouldFold(game, me)) {
       return { action: 'discard', tile: safestDiscard(game, me).tile, reason: 'fold' };
@@ -3523,7 +3711,7 @@ const NS_MJAI = (() => {
       level: 'blunder',
       lines: [{
         kind: 'fold',
-        what: `${names}がリーチ。あなたの手はあと${sh}枚必要です。ここは降りる場面です。`,
+        what: `${names}がリーチ。あなたの手はテンパイまであと${sh}枚です。ここは降りる場面です。`,
         why: '手が遠いのに押すと、あがれないうえに振り込みます。麻雀でいちばん大きな損はこれです。',
         better: { tile: safe.tile, label: `${M.tileName(safe.tile)}切り`,
           reason: safe.danger === 0 ? 'リーチした人が自分で捨てている牌なので、100%当たりません。' : 'いまの手牌でいちばん安全です。' },
@@ -3553,19 +3741,23 @@ const NS_MJAI = (() => {
         level = 'blunder';
         lines.push({
           kind: 'push',
-          what: `${M.tileName(tile)}は危ない牌です。しかも手はあと${sh}枚必要です。`,
+          what: `${M.tileName(tile)}は危ない牌です。しかも手はテンパイまであと${sh}枚です。`,
           why: '手が遠いのに危険牌を押すのは、いちばん損な打ち方です。あがれないうえに振り込みます。',
           better: { tile: safe.tile, label: `${M.tileName(safe.tile)}切り`,
             reason: safe.danger === 0 ? '現物なので100%安全です。' : 'いまの手牌でいちばん安全です。' },
-          lesson: '手が遠い（あと2枚以上）＋ リーチが入っている ＝ 降りる。この条件だけ覚えてください。',
+          lesson: '手が遠い（テンパイまであと2枚以上）＋ リーチが入っている ＝ 降りる。この条件だけ覚えてください。',
         });
       } else if (d >= 9) {
         level = 'miss';
+        const n = Number(tile[1]);
         lines.push({
           kind: 'push',
           what: `${M.tileName(tile)}は危険度の高い牌です。`,
-          why: '中張牌（3〜7）はいちばん当たりやすい牌です。テンパイなら押していい場面ですが、承知のうえで。',
-          lesson: '危ない順は、中張牌 → 2と8 → 1と9 → 字牌 → 現物。',
+          why: (n === 2 || n === 8
+            ? '2と8は、3〜7の次に当たりやすい牌です。'
+            : '3〜7の牌は、両面待ちの両側になりやすく、いちばん当たりやすい牌です。')
+            + 'テンパイなら押していい場面ですが、承知のうえで。',
+          lesson: '危ない順は、3〜7 → 2と8 → 1と9 → 字牌 → 現物。',
         });
       }
     }
@@ -3685,7 +3877,7 @@ const NS_PLAY = (() => {
   const CHESS_SETUPS = {
     // ポーンゲーム：ポーンだけ。向こう端に到達すれば勝ち。最初の1局に向く
     pawns: {
-      w: 8, h: 8, side: 'w', depth: 2,
+      w: 8, h: 8, side: 'w', depth: 2, stuckLoses: true,
       board: (() => {
         const b = {};
         for (const f of 'abcdefgh') { b[f + '2'] = 'P'; b[f + '7'] = 'p'; }
@@ -3700,19 +3892,30 @@ const NS_PLAY = (() => {
         return null;
       },
     },
-    // 4×4。キングがいるので本物のチェックメイトが起きる
+    // 4×4。キングがいるので本物のチェックメイトが起きる（ポーンの2マス進みはない）
     mini: {
       w: 4, h: 4, side: 'w', depth: 3,
       board: { a1: 'R', b1: 'K', a2: 'P', b2: 'P', d4: 'r', c4: 'k', d3: 'p', c3: 'p' },
       win: '相手のキングをチェックメイトする',
     },
-    full: { w: 8, h: 8, side: 'w', depth: 2, board: null, win: '相手のキングをチェックメイトする' },
+    // 本物の盤。キャスリングとアンパッサンも指せる
+    full: {
+      w: 8, h: 8, side: 'w', depth: 2, board: null, special: true,
+      win: '相手のキングをチェックメイトする',
+    },
+  };
+
+  const DRAW_REASON = {
+    stalemate: 'ステイルメイト（動ける手がないのにチェックされていない）',
+    material: '駒が足りず、どちらもチェックメイトできない',
+    repetition: '同じ局面が3回くり返された',
+    fifty: '50手のあいだ、駒を取る手もポーンを動かす手もなかった',
   };
 
   function playChess(ctx, { Board, C }) {
     const s = ctx.step;
     const cfg = CHESS_SETUPS[s.variant || 'mini'];
-    const opts = { w: cfg.w, h: cfg.h };
+    const baseOpts = { w: cfg.w, h: cfg.h };
     const me = cfg.side, foe = me === 'w' ? 'b' : 'w';
 
     ctx.prompt(s.prompt || `あなたは白です。${cfg.win}。`);
@@ -3720,8 +3923,10 @@ const NS_PLAY = (() => {
     const board = new Board(host, { variant: 'chess', w: cfg.w, h: cfg.h, coords: true });
     const status = el('p', 'note');
     ctx.mount.appendChild(status);
-    let position, turn, from, busy, finished;
-    let history = [];   // 自分の手番の直前の盤面を積む（待った用）
+    // opts にはキャスリング権とアンパッサンのマスが入る（本物の盤のときだけ）
+    let position, turn, from, busy, finished, opts, quiet, seen;
+    let history = [];   // 自分の手番の直前の状態を積む（待った用）
+    let token = 0;      // 待ったや最初からで、考え中のAIの手を捨てるための番号
 
     const coach = makeCoach(ctx, {
       goals: s.goals || [],
@@ -3734,51 +3939,86 @@ const NS_PLAY = (() => {
         warnUnsafe: settings.get('warnUnsafe'),
         showThreat: settings.get('showThreat'),
       });
+    const posKey = () => `${turn}|${opts.ep || ''}|${JSON.stringify(opts.castle)}|`
+      + Object.keys(position).sort().map((k) => k + position[k]).join(',');
+    const remember = () => { const k = posKey(); seen.set(k, (seen.get(k) || 0) + 1); };
+
     const reset = () => {
+      token++;
       position = { ...(cfg.board || C.START_POSITION) };
-      turn = 'w'; from = null; busy = false; finished = false;
+      opts = cfg.special
+        ? { ...baseOpts, castle: { w: { k: true, q: true }, b: { k: true, q: true } }, ep: null }
+        : { ...baseOpts };
+      turn = 'w'; from = null; busy = false; finished = false; quiet = 0;
+      seen = new Map(); remember();
       history = [];
       ctx.clear(); coach.clear(); paint();
       tell('あなたの番です。動かしたい駒をタップしてください。');
+      paintActions();
     };
     const tell = (t) => (status.textContent = t);
     const paint = (extra = {}) => board.setPosition(position, extra);
+
+    /** 手を盤に反映する（キャスリング権・アンパッサン・50手ルールの記録も進める） */
+    const play = (mfrom, mto) => {
+      const piece = position[mfrom];
+      const irreversible = !!position[mto] || C.kindOf(piece) === 'P';
+      const nextOpts = cfg.special ? C.nextRights(opts, position, mfrom, mto) : opts;
+      position = C.applyMove(position, mfrom, mto, opts);
+      opts = nextOpts;
+      quiet = irreversible ? 0 : quiet + 1;
+    };
 
     const verdict = () => {
       if (cfg.check) { const r = cfg.check(position); if (r) return r; }
       const st = C.gameStatus(position, turn, opts);
       if (st === 'checkmate') return turn === me ? 'lose' : 'win';
-      if (st === 'stalemate') return turn === me ? 'lose' : 'win';
+      if (st === 'stalemate') {
+        // ポーンゲームだけは「相手が動けなくなったら勝ち」というルール
+        if (cfg.stuckLoses) return turn === me ? 'lose' : 'win';
+        return 'draw:stalemate';
+      }
+      if (!cfg.check && C.insufficientMaterial(position)) return 'draw:material';
+      if ((seen.get(posKey()) || 0) >= 3) return 'draw:repetition';
+      if (quiet >= 100) return 'draw:fifty';
       return null;
     };
 
     const finish = (r) => {
-      finished = true; board.onPick = null;
-      if (r === 'win') ctx.solved('<b>勝ちました</b>盤の上で最後まで形にできました。');
-      else {
+      // 盤の onPick は外さない（finished で止める）。外すと「もう一局」や「待った」で盤が動かなくなる
+      finished = true; busy = false;
+      if (r === 'win') { ctx.solved('<b>勝ちました</b>盤の上で最後まで形にできました。'); return; }
+      if (r.startsWith('draw')) {
+        ctx.say(`<b>引き分けです</b>${DRAW_REASON[r.split(':')[1]] || ''}。勝ちきるには、詰ませる手順が必要です。`);
+      } else {
         ctx.miss();
         ctx.say('<b>今回は負けました</b>もう一局やってみましょう。負けた局の方が身につきます。', 'ng');
-        ctx.actions([
-          { label: 'もう一局', variant: 'tone', onClick: reset },
-          { label: '次へ進む', variant: 'ghost', onClick: () => ctx.solved() },
-        ]);
       }
+      ctx.actions([
+        { label: 'もう一局', variant: 'tone', onClick: reset },
+        { label: '1手もどす', variant: 'ghost', onClick: undo, disabled: !history.length },
+        // 勝てなかった局で先へ進むときは「一発正解」には数えない
+        { label: '次へ進む', variant: 'ghost', onClick: () => { ctx.miss(); ctx.solved(); } },
+      ]);
     };
 
     const aiTurn = async () => {
+      const my = ++token;
       busy = true; tell('相手が考えています…');
       await wait(420);
+      if (my !== token || finished) return;   // 考えている間に待った／最初からが押された
       const mv = C.pickMove(position, foe, opts, cfg.depth);
-      if (!mv) { busy = false; return finish(verdict() || 'win'); }
+      if (!mv) { busy = false; return finish(verdict() || 'draw:stalemate'); }
       const took = !!position[mv.to];
-      position = C.applyMove(position, mv.from, mv.to, opts);
+      play(mv.from, mv.to);
       took ? sfx.capture('chess') : sfx.place('chess');
       turn = me;
+      remember();
       paint({ [mv.from]: 'last', [mv.to]: 'last' });
       busy = false;
       const r = verdict();
       if (r) return finish(r);
-      tell(C.inCheck(position, me, opts) ? 'あなたのキングが王手されています。' : 'あなたの番です。');
+      tell(C.inCheck(position, me, opts) ? 'あなたのキングがチェックされています。' : 'あなたの番です。');
       paintActions();
     };
 
@@ -3799,16 +4039,22 @@ const NS_PLAY = (() => {
         }
         return;
       }
+      const mfrom = from;
       const took = !!position[sq];
       const beforeMove = position;
-      history.push({ position: { ...position }, turn, move: { from, to: sq } });
-      position = C.applyMove(position, from, sq, opts);
+      const beforeOpts = opts;
+      history.push({ position: { ...position }, turn, move: { from: mfrom, to: sq }, opts, quiet, seen: new Map(seen) });
+      play(mfrom, sq);
+      turn = foe;
+      remember();
       took ? sfx.capture('chess') : sfx.place('chess');
-      paint({ [from]: 'last', [sq]: 'last' });
-      const rv = K.explainMove('chess', beforeMove, position, { from, to: sq }, me, opts);
-      const gl = checkGoals(s.goals, {
-        before: beforeMove, after: position, move: { from, to: sq }, color: me, ctx: opts,
-        ply: history.length, history,
+      const r = verdict();
+      const rv = K.explainMove('chess', beforeMove, position, { from: mfrom, to: sq }, me, beforeOpts,
+        { mate: C.gameStatus(position, foe, opts) === 'checkmate' });
+      const gl = r === 'win' ? [] : checkGoals(s.goals, {
+        before: beforeMove, after: position, move: { from: mfrom, to: sq }, color: me, ctx: beforeOpts,
+        // ply は両者の手を数えた手数（白の n 手目 = 2n−1）
+        ply: history.length * 2 - 1, history,
       });
       // 目標にそぐわない指摘は先に、できている報告は後に回す
       rv.lines = [...gl.filter((g) => !g.ok), ...rv.lines, ...gl.filter((g) => g.ok)];
@@ -3816,9 +4062,8 @@ const NS_PLAY = (() => {
       coach.show(rv);
       // 講評が触れているマスを盤の上でも示す。文章だけでは探せない
       const cm = rv.lines.find((l) => l.marks && Object.keys(l.marks).length);
-      paint({ [from]: 'last', [sq]: 'last', ...(cm ? cm.marks : {}) });
-      from = null; turn = foe;
-      const r = verdict();
+      paint({ [mfrom]: 'last', [sq]: 'last', ...(cm ? cm.marks : {}) });
+      from = null;
       if (r) return finish(r);
       aiTurn();
     };
@@ -3826,7 +4071,8 @@ const NS_PLAY = (() => {
     const undo = () => {
       const prev = history.pop();
       if (!prev) return;
-      position = prev.position; turn = prev.turn;
+      token++;   // 考え中のAIの手を捨てる
+      position = prev.position; turn = prev.turn; opts = prev.opts; quiet = prev.quiet; seen = prev.seen;
       from = null; busy = false; finished = false;
       coach.clear(); ctx.clear(); paint();
       tell('1手もどしました。もう一度どうぞ。');
@@ -3836,12 +4082,11 @@ const NS_PLAY = (() => {
     function paintActions() {
       ctx.actions([
         { label: '1手もどす', variant: 'ghost', onClick: undo, disabled: !history.length },
-        { label: '最初から', variant: 'ghost', onClick: () => { reset(); paintActions(); } },
+        { label: '最初から', variant: 'ghost', onClick: reset },
       ]);
     }
 
     reset();
-    paintActions();
   }
 
   // ── 将棋 ──────────────────────────────────────────────────
@@ -3861,8 +4106,9 @@ const NS_PLAY = (() => {
     ctx.mount.append(myHandHost, status);
 
     const board = new Board(host, { variant: 'shogi', w: shape.w, h: shape.h, coords: true });
-    let state, from, dropKind, busy, finished;
+    let state, from, dropKind, busy, finished, seen;
     let history = [];
+    let token = 0;   // 待った・最初からで、考え中の相手の手を捨てるための番号
 
     const coach = makeCoach(ctx, {
       goals: s.goals || [],
@@ -3870,12 +4116,14 @@ const NS_PLAY = (() => {
       onShowBetter: (line) => board.setPosition(state.board, line.marks),
     });
     const hintMarks = (sq) => K.moveMarks('shogi', state.board, sq,
-      S.legalMovesFrom(state, sq, shape).map((m) => m.to), 'b', shape, {
+      [...new Set(S.legalMovesFrom(state, sq, shape).map((m) => m.to))], 'b', shape, {
         showMoves: settings.get('showMoves'),
         warnUnsafe: settings.get('warnUnsafe'),
         showThreat: settings.get('showThreat'),
       });
     const tell = (t) => (status.textContent = t);
+    const key = () => state.turn + JSON.stringify(state.board) + JSON.stringify(state.hands);
+    const remember = () => { const k = key(); seen.set(k, (seen.get(k) || 0) + 1); };
 
     const paintHands = () => {
       renderHand(foeHandHost, state.hands.w, { label: '相手の持ち駒', order: S.HAND_ORDER });
@@ -3895,38 +4143,50 @@ const NS_PLAY = (() => {
     const paint = (extra = {}) => board.setPosition(state.board, extra);
 
     const reset = () => {
+      token++;
       state = start(); from = null; dropKind = null; busy = false; finished = false;
+      seen = new Map(); remember();
       history = [];
       ctx.clear(); coach.clear(); paint(); paintHands();
       tell('あなたの番です。駒か持ち駒をタップしてください。');
+      paintActions();
     };
 
     const finish = (r) => {
-      finished = true; board.onPick = null;
-      if (r === 'win') ctx.solved('<b>詰みました</b>持ち駒まで使えているなら、もう将棋を指せています。');
-      else {
+      // onPick は外さない（finished で止める）。外すと「もう一局」「待った」で盤が動かなくなる
+      finished = true; busy = false;
+      if (r === 'win') { ctx.solved('<b>詰みました</b>持ち駒まで使えているなら、もう将棋を指せています。'); return; }
+      if (r === 'draw') {
+        ctx.say('<b>千日手です</b>同じ局面が4回くり返されたので、引き分けになりました。');
+      } else {
         ctx.miss();
         ctx.say('<b>今回は詰まされました</b>取られた駒は相手の戦力になります。そこが将棋の勝負どころです。', 'ng');
-        ctx.actions([
-          { label: 'もう一局', variant: 'tone', onClick: reset },
-          { label: '次へ進む', variant: 'ghost', onClick: () => ctx.solved() },
-        ]);
       }
+      ctx.actions([
+        { label: 'もう一局', variant: 'tone', onClick: reset },
+        { label: '1手もどす', variant: 'ghost', onClick: undo, disabled: !history.length },
+        { label: '次へ進む', variant: 'ghost', onClick: () => { ctx.miss(); ctx.solved(); } },
+      ]);
     };
 
     const check = () => {
       const st = S.gameStatus(state, shape);
       if (st === 'checkmate' || st === 'stuck') return state.turn === 'b' ? 'lose' : 'win';
+      if ((seen.get(key()) || 0) >= 4) return 'draw';
       return null;
     };
 
     const aiTurn = async () => {
+      const my = ++token;
       busy = true; tell('相手が考えています…');
       await wait(450);
+      if (my !== token || finished) return;
       const mv = S.pickMove(state, shape, depth);
+      if (my !== token || finished) return;
       if (!mv) { busy = false; return finish('win'); }
       const took = !!state.board[mv.to];
       state = S.applyMove(state, mv, shape);
+      remember();
       took ? sfx.capture('shogi') : sfx.place('shogi');
       paint({ ...(mv.from ? { [mv.from]: 'last' } : {}), [mv.to]: 'last' });
       paintHands();
@@ -3940,16 +4200,18 @@ const NS_PLAY = (() => {
     const commit = (mv, mark) => {
       const took = !!state.board[mv.to];
       const beforeBoard = state.board;
-      history.push({ board: { ...state.board }, hands: S.cloneHands(state.hands), turn: state.turn, move: mv });
+      history.push({ board: { ...state.board }, hands: S.cloneHands(state.hands), turn: state.turn, move: mv, seen: new Map(seen) });
       state = S.applyMove(state, mv, shape);
+      remember();
       took ? sfx.capture('shogi') : sfx.place('shogi');
       paint(mark); paintHands();
+      const r = check();
       const rv = mv.from
-        ? K.explainMove('shogi', beforeBoard, state.board, mv, 'b', shape)
+        ? K.explainMove('shogi', beforeBoard, state.board, mv, 'b', shape, { mate: r === 'win' })
         : { level: 'ok', lines: [] };
-      const gl = checkGoals(s.goals, {
+      const gl = r === 'win' ? [] : checkGoals(s.goals, {
         before: beforeBoard, after: state.board, move: mv, color: 'b', ctx: shape,
-        ply: history.length, history,
+        ply: history.length * 2 - 1, history,   // 両者の手を数えた手数
       });
       rv.lines = [...gl.filter((g) => !g.ok), ...rv.lines, ...gl.filter((g) => g.ok)];
       if (gl.some((g) => !g.ok) && rv.level === 'ok') rv.level = 'miss';
@@ -3957,9 +4219,8 @@ const NS_PLAY = (() => {
         coach.show(rv);
         const cm = rv.lines.find((l) => l.marks && Object.keys(l.marks).length);
         if (cm) paint({ ...mark, ...cm.marks });
-      }
+      } else coach.clear();
       from = null; dropKind = null;
-      const r = check();
       if (r) return finish(r);
       aiTurn();
     };
@@ -3987,18 +4248,24 @@ const NS_PLAY = (() => {
       }
       const promo = cands.find((m) => m.promote);
       const plain = cands.find((m) => !m.promote);
+      const mark = { [from]: 'last', [sq]: 'last' };   // いまの from を固定しておく
       if (promo && plain) {
-        askPromote(ctx, () => commit(promo, { [from]: 'last', [sq]: 'last' }),
-          () => commit(plain, { [from]: 'last', [sq]: 'last' }));
+        // 成るか聞いている間は盤を止める。止めないと別の手を指したあとに古い手が指される
+        busy = true;
+        askPromote(ctx,
+          () => { busy = false; commit(promo, mark); },
+          () => { busy = false; commit(plain, mark); });
         return;
       }
-      commit(cands[0], { [from]: 'last', [sq]: 'last' });
+      commit(cands[0], mark);
     };
 
     const undo = () => {
       const prev = history.pop();
       if (!prev) return;
-      state = prev;
+      token++;   // 考え中の相手の手を捨てる
+      state = { board: prev.board, hands: prev.hands, turn: prev.turn };
+      seen = prev.seen;
       from = null; dropKind = null; busy = false; finished = false;
       coach.clear(); ctx.clear(); paint(); paintHands();
       tell('1手もどしました。もう一度どうぞ。');
@@ -4008,12 +4275,11 @@ const NS_PLAY = (() => {
     function paintActions() {
       ctx.actions([
         { label: '1手もどす', variant: 'ghost', onClick: undo, disabled: !history.length },
-        { label: '最初から', variant: 'ghost', onClick: () => { reset(); paintActions(); } },
+        { label: '最初から', variant: 'ghost', onClick: reset },
       ]);
     }
 
     reset();
-    paintActions();
   }
 
   function askPromote(ctx, onYes, onNo) {
@@ -4055,7 +4321,9 @@ const NS_PLAY = (() => {
       hand = M.sortTiles(wall.splice(0, handSize));
       discards = []; turns = 0; finished = false;
       history = [];
-      ctx.clear(); coach.clear(); paint();
+      ctx.clear(); coach.clear();
+      paintActions();   // 先にボタンを戻す（配牌でいきなりアガリのときは paint が上書きする）
+      paint();
     };
 
     const paint = () => {
@@ -4068,8 +4336,9 @@ const NS_PLAY = (() => {
       riverLabel.style.display = discards.length ? '' : 'none';
       if (done && !finished) return win();
       const sh = M.shanten(hand, sets);
+      // 14枚（ツモ後）で数えたシャンテン数なので、0 は「うまく切ればテンパイ」
       status.textContent = finished ? ''
-        : `${turns + 1}巡目（残り${limit - turns}回）／ ${sh <= 0 ? 'テンパイしています。' : `テンパイまであと${sh}枚。`}捨てる牌をタップ。`;
+        : `${turns + 1}巡目（残り${limit - turns}回）／ ${sh <= 0 ? '1枚切ればテンパイです。' : `テンパイまであと${sh}枚。`}捨てる牌をタップ。`;
     };
 
     const win = () => {
@@ -4105,6 +4374,7 @@ const NS_PLAY = (() => {
           : '<b>時間切れです</b>あと少しでした。もう一度やってみましょう。', 'ng');
         ctx.actions([
           { label: 'もう一度', variant: 'tone', onClick: reset },
+          { label: '1枚もどす', variant: 'ghost', onClick: undo },
           { label: '次へ進む', variant: 'ghost', onClick: () => ctx.solved() },
         ]);
         return;
@@ -4125,12 +4395,11 @@ const NS_PLAY = (() => {
     function paintActions() {
       ctx.actions([
         { label: '1枚もどす', variant: 'ghost', onClick: undo, disabled: !history.length },
-        { label: '配りなおす', variant: 'ghost', onClick: () => { reset(); paintActions(); } },
+        { label: '配りなおす', variant: 'ghost', onClick: reset },
       ]);
     }
 
     reset();
-    paintActions();
   }
 
   return { CHESS_SETUPS, playChess, playShogi, soloMahjong };
@@ -4146,9 +4415,7 @@ const NS_PLAY4 = (() => {
   const { settings } = NS_SETTINGS;
   // play4.js — 4人打ちの対局画面。
   //
-  // スマホの縦画面で4人ぶんを見せるため、麻雀卓の形は再現せず、
-  // 「相手3人を行で積む → 自分の河 → 自分の手牌」という縦の並びにする。
-  // 位置関係より、何が捨てられているかが読めることを優先した。
+  // 麻雀卓の形（上＝対面、左＝上家、右＝下家、下＝自分）で4人ぶんの河を見せる。
 
 
 
@@ -4163,7 +4430,7 @@ const NS_PLAY4 = (() => {
     const s = ctx.step;
     const rule = { naki: false, kan: false, ...(s.rule || {}) };
     const ME = 0;
-    const game = new Game(rule);
+    let game = new Game(rule);
     let busy = false, showDanger = s.showDanger !== false;
 
     ctx.prompt(s.prompt || 'あなたは東家（下）です。1局打ってみましょう。');
@@ -4266,6 +4533,8 @@ const NS_PLAY4 = (() => {
           states[i] = d === 0 ? 'safe' : d >= 9 ? 'risk' : d >= 6 ? 'warn' : 'mid';
         });
       }
+      // リーチ中はツモ牌（右端）以外を薄くする
+      if (game.riichi[ME] && drawn) tiles.forEach((_, i) => { if (i < tiles.length - 1) states[i] = 'dim'; });
       handWrap.innerHTML = '';
       const box = el('div');
       handWrap.appendChild(box);
@@ -4283,9 +4552,14 @@ const NS_PLAY4 = (() => {
     const paint = () => { paintCenter(); [0, 1, 2, 3].forEach(paintSeat); paintHand(); };
 
     // ── 進行
+    // restart や次の局で古いループを止めるための番号。await をまたいだら必ず確かめる
+    let runId = 0;
+
     async function loop() {
+      const my = runId;
       let guard = 0;
       while (game.phase !== 'end' && guard++ < 400) {
+        if (my !== runId) return;
         if (game.phase === 'draw') {
           game.draw();
           if (game.phase === 'end') break;
@@ -4296,25 +4570,51 @@ const NS_PLAY4 = (() => {
           const a = cpuTurn(game, game.turn);
           if (a.action === 'tsumo') { game.tsumo(); break; }
           await wait(260);
+          if (my !== runId) return;
           game.discard(a.tile, { riichi: a.riichi });
           sfx.place('mahjong');
           if (a.riichi) tell(`${game.seatJa(game.lastDiscard.p)}家がリーチ！`);
           paint();
           await wait(180);
+          if (my !== runId) return;
           continue;
         }
         if (game.phase === 'call') {
-          // 自分がロンできるなら止める
-          const mine = (game.pending || []).filter((c) => c.p === ME);
-          if (mine.length) { paint(); return offerCalls(mine); }
-          const take = (game.pending || []).find((c) => cpuCall(game, c));
-          if (take && take.type === 'ron') { game.ron(take.p, take.tile); break; }
-          if (take) { game.call(take.p, take.type, take.tile, take.pat); paint(); continue; }
-          game.passCalls();
+          const r = resolveCalls(false);
+          if (r === 'me') return;
+          if (r === 'ended') break;
+          continue;
         }
+        break;
       }
+      if (my !== runId) return;
       paint();
       finish();
+    }
+
+    /**
+     * 捨て牌に対する鳴き・ロンを優先順位どおりに裁く。
+     * ロン（頭ハネ：捨てた人から近い順）＞ ポン・カン ＞ チー。
+     * 戻り値: 'me' 自分に選ばせる / 'ended' 局が終わった / 'continue' 次へ
+     */
+    function resolveCalls(mePassed) {
+      const pending = game.pending || [];
+      const order = (p) => (p - game.lastDiscard.p + 4) % 4;
+      const rons = pending.filter((c) => c.type === 'ron').sort((a, b) => order(a.p) - order(b.p));
+      const mine = pending.filter((c) => c.p === ME);
+      if (!mePassed && rons.some((c) => c.p === ME)) { paint(); offerCalls(mine); return 'me'; }
+      const cpuRon = rons.find((c) => c.p !== ME);
+      if (cpuRon) { game.ron(cpuRon.p, cpuRon.tile); return 'ended'; }
+
+      const cpuWants = pending.filter((c) => c.p !== ME && c.type !== 'ron' && cpuCall(game, c));
+      const cpuPon = cpuWants.find((c) => c.type === 'pon' || c.type === 'kan');
+      if (cpuPon) { game.call(cpuPon.p, cpuPon.type, cpuPon.tile, cpuPon.pat); paint(); return 'continue'; }
+      const myCalls = mine.filter((c) => c.type !== 'ron');
+      if (!mePassed && myCalls.length) { paint(); offerCalls(myCalls); return 'me'; }
+      const cpuChi = cpuWants.find((c) => c.type === 'chi');
+      if (cpuChi) { game.call(cpuChi.p, cpuChi.type, cpuChi.tile, cpuChi.pat); paint(); return 'continue'; }
+      game.passCalls();
+      return 'continue';
     }
 
     function tell(t) { status.textContent = t; }
@@ -4323,7 +4623,7 @@ const NS_PLAY4 = (() => {
       paint();
       const acts = [];
       if (game.canTsumo(ME)) {
-        acts.push({ label: 'ツモ！', variant: 'tone', onClick: () => { game.tsumo(ME); paint(); finish(); } });
+        acts.push({ label: 'ツモ！', variant: 'tone', onClick: () => { runId++; game.tsumo(ME); paint(); finish(); } });
       }
       const rOpts = game.riichiOptions(ME);
       if (rOpts.length) {
@@ -4340,12 +4640,13 @@ const NS_PLAY4 = (() => {
 
       // 押し引きの助言は、切る「前」に出すのが要点。
       // 助言が無い場面では、直前の講評を残す（消すと読む間もなく消える）
-      if (coachOn()) {
+      if (coachOn() && !game.riichi[ME]) {
         const adv = foldAdvice(game, ME);
         if (adv) showCoach(adv);
       }
       const threats = riichiPlayers(game, ME);
-      tell(threats.length
+      if (game.riichi[ME]) tell('リーチ中です。ツモった牌をそのまま切ります（あがれるときはツモ）。');
+      else tell(threats.length
         ? `${threats.map((p) => game.seatJa(p) + '家').join('と')}がリーチ中。切る牌を選んでください。`
         : '切る牌を選んでください。');
     }
@@ -4365,17 +4666,24 @@ const NS_PLAY4 = (() => {
           onDiscard(t, true);
         },
       });
+      ctx.actions([
+        { label: 'リーチをやめる', variant: 'ghost', onClick: () => { riichiMode = false; myTurn(); } },
+      ]);
     }
 
     async function onDiscard(tile, riichi = false) {
       if (busy || game.phase !== 'discard' || game.turn !== ME) return;
+      if (game.riichi[ME] && game.drawn && tile !== game.drawn) {
+        tell('リーチ中は、ツモった牌（右端）しか切れません。');
+        return;
+      }
       busy = true;
       const before = M.sortTiles([...game.hands[ME], ...(game.drawn ? [game.drawn] : [])]);
       game.discard(tile, { riichi });
       sfx.place('mahjong');
 
-      // 講評：押し引きがあるならそちら、なければ受け入れ
-      if (coachOn()) {
+      // 講評：押し引きがあるならそちら、なければ受け入れ（リーチ後のツモ切りは講評しない）
+      if (coachOn() && !(game.riichi[ME] && !riichi)) {
         const push = reviewDiscard4(game, ME, tile);
         if (push.lines.length) showCoach(push);
         else showCoach(K.explainDiscard(before, tile, game.setsNeeded(ME), []));
@@ -4383,28 +4691,49 @@ const NS_PLAY4 = (() => {
       paint();
       ctx.actions([{ label: 'やり直す', variant: 'ghost', onClick: restart }]);
       busy = false;
+      const my = runId;
       await wait(500);
+      if (my !== runId) return;
       await loop();
     }
 
     function offerCalls(mine) {
       const ron = mine.find((c) => c.type === 'ron');
       const acts = [];
-      if (ron) acts.push({ label: 'ロン！', variant: 'tone', onClick: () => { game.ron(ME, ron.tile); paint(); finish(); } });
+      if (ron) acts.push({ label: 'ロン！', variant: 'tone', onClick: () => { runId++; game.ron(ME, ron.tile); paint(); finish(); } });
       for (const c of mine.filter((x) => x.type !== 'ron')) {
+        const label = c.type === 'pon' ? 'ポン' : c.type === 'kan' ? 'カン'
+          : `チー（${c.pat.map(M.tileName).join('')}）`;
         acts.push({
-          label: c.type === 'pon' ? 'ポン' : c.type === 'chi' ? 'チー' : 'カン',
+          label,
           variant: 'ghost',
-          onClick: () => { game.call(ME, c.type, c.tile, c.pat); paint(); myTurn(); },
+          onClick: () => {
+            game.call(ME, c.type, c.tile, c.pat); paint();
+            // カンのあとはツモから。ポン・チーのあとはそのまま切る
+            if (c.type === 'kan') loop(); else myTurn();
+          },
         });
       }
-      acts.push({ label: 'パス', variant: 'ghost', onClick: async () => { game.passCalls(); await loop(); } });
+      acts.push({
+        label: 'パス', variant: 'ghost', onClick: async () => {
+          if (ron) {
+            // 見逃し：次に自分が切るまでロンできない（リーチ中なら局の終わりまで）
+            game.tempFuriten[ME] = true;
+            if (game.riichi[ME]) game.riichiFuriten[ME] = true;
+          }
+          const r = resolveCalls(true);
+          if (r === 'ended') { paint(); finish(); return; }
+          await loop();
+        },
+      });
       ctx.actions(acts);
-      tell(ron ? `${M.tileName(ron.tile)}が出ました。ロンできます。` : '鳴けます。');
+      tell(ron ? `${M.tileName(ron.tile)}が出ました。ロンできます。` : `${M.tileName(mine[0].tile)}が出ました。鳴けます。`);
       if (ron && coachOn()) {
         showCoach({ level: 'ok', lines: [{
           kind: 'ron', what: `${M.tileName(ron.tile)}であがれます。`,
-          why: '見逃すとフリテンになり、以降その手ではロンできなくなります。',
+          why: game.riichi[ME]
+            ? '見逃すとフリテンになり、リーチ中なのでこの局はもうロンできません（ツモならあがれます）。'
+            : '見逃すとフリテンになり、次に自分が牌を切るまでロンできません。',
           lesson: '',
         }] });
       }
@@ -4412,40 +4741,76 @@ const NS_PLAY4 = (() => {
 
     function finish() {
       const r = game.result;
-      ctx.actions([{ label: 'もう1局', variant: 'tone', onClick: restart }]);
+      if (!r) return;
+      const nextLabel = '次の局へ';
+      const others = [
+        { label: nextLabel, variant: 'tone', onClick: nextHand },
+        // 勝てなかった局で先へ進むときは「一発正解」には数えない
+        { label: '次へ進む', variant: 'ghost', onClick: () => { ctx.miss(); ctx.solved(); } },
+      ];
       if (r.kind === 'draw') {
         const mine = r.tenpai[ME];
         tell('流局しました。');
         ctx.say(`<b>流局</b>${mine ? 'あなたはテンパイでした。' : 'あなたはテンパイしていませんでした。'}`,
           mine ? 'ok' : 'ng');
+        ctx.actions(others);
         return;
       }
       const who = r.winner === ME ? 'あなた' : `${game.seatJa(r.winner)}家`;
       const yaku = [...r.list.map((k) => M.YAKU_JA[k]?.ja).filter(Boolean), ...(r.extras || [])].join('・');
+      const meldHtml = (r.melds || []).map((m) =>
+        `<span class="mjmeld">${m.tiles.map((t) => `<span class="tile">${tileFace(t)}</span>`).join('')}</span>`).join('');
       const handHtml = `<div class="tiles tiles--tight" style="margin-top:.5rem">${
-        r.hand.map((t) => `<span class="tile">${tileFace(t)}</span>`).join('')}</div>`;
+        r.hand.map((t) => `<span class="tile">${tileFace(t)}</span>`).join('')}${meldHtml}</div>`;
       if (r.winner === ME) {
         sfx.finish();
         ctx.solved(`<b>あがりました</b>${yaku}（${r.han}翻 ${r.label}）${r.gain.toLocaleString()}点${handHtml}`);
+        // 次の局も打てるようにしておく
+        ctx.actions([
+          { label: '次へ', variant: 'tone', onClick: () => ctx.advance() },
+          { label: nextLabel, variant: 'ghost', onClick: nextHand },
+        ]);
       } else {
         const dealIn = !r.tsumo && r.from === ME;
         ctx.say(`<b>${who}のあがり</b>${dealIn ? 'あなたの捨て牌に当たりました（放銃）。' : ''}`
           + `${yaku}（${r.han}翻 ${r.label}）${handHtml}`, dealIn ? 'ng' : undefined);
         if (dealIn) ctx.miss();
+        ctx.actions(others);
       }
     }
 
-    async function restart() {
-      game.deal();
+    function begin() {
       busy = false; riichiMode = false;
-      coachBox.innerHTML = ''; ctx.clear();
+      coachBox.innerHTML = ''; ctx.clear(); tell('');
       paint();
-      await loop();
+      loop();
+    }
+
+    /** 局の途中からやり直す（点棒と供託も配牌時点に戻す） */
+    function restart() {
+      runId++;
+      if (game.phase !== 'end') game.rollback();
+      game.deal();
+      begin();
+    }
+
+    /** 次の局へ進む。半荘が終わったら結果を出す */
+    function nextHand() {
+      runId++;
+      game.nextKyoku();
+      if (!game.over) { begin(); return; }
+      paint();
+      const rank = [0, 1, 2, 3].sort((a, b) => game.scores[b] - game.scores[a]);
+      const place = rank.indexOf(ME) + 1;
+      ctx.say(`<b>半荘終了</b>あなたは${place}位（${game.scores[ME].toLocaleString()}点）でした。`);
+      ctx.actions([
+        { label: '新しい半荘', variant: 'tone', onClick: () => { runId++; game = new Game(rule); game.deal(); begin(); } },
+        { label: '次へ進む', variant: 'ghost', onClick: () => { if (place > 1) ctx.miss(); ctx.solved(); } },
+      ]);
     }
 
     game.deal();
-    paint();
-    loop();
+    begin();
   }
 
   return { playFour };
@@ -4490,17 +4855,26 @@ const NS_LESSON = (() => {
   const sameSet = (a, b) => a.length === b.length && [...a].sort().join() === [...b].sort().join();
 
   class LessonRunner {
-    constructor(lesson, host, { onFinish, onExit } = {}) {
+    /**
+     * opts.only に問題番号の配列を渡すと、その問題だけを解き直す「復習」になる。
+     * 復習では修了の記録は付けず、一発で解けた問題の復習だけを消す。
+     */
+    constructor(lesson, host, { onFinish, onExit, only = null } = {}) {
       this.lesson = lesson;
       this.host = host;
       this.onFinish = onFinish;
       this.onExit = onExit;
-      this.i = 0;
+      this.order = only && only.length ? only.filter((n) => lesson.steps[n]) : lesson.steps.map((_, n) => n);
+      if (!this.order.length) this.order = lesson.steps.map((_, n) => n);
+      this.review = !!(only && only.length);
+      this.pos = 0;
       this.correct = 0;
       this.missedThisStep = false;
+      this.solvedThisStep = false;
       this.render();
     }
 
+    get i() { return this.order[this.pos]; }
     get step() { return this.lesson.steps[this.i]; }
 
     render() {
@@ -4509,12 +4883,13 @@ const NS_LESSON = (() => {
       stage.style.setProperty('--tone', `var(--${this.lesson.game})`);
 
       const bar = el('div', 'steps');
-      this.lesson.steps.forEach((_, n) => {
+      this.order.forEach((_, n) => {
         const i = el('i');
-        i.dataset.s = n < this.i ? 'done' : n === this.i ? 'now' : '';
+        i.dataset.s = n < this.pos ? 'done' : n === this.pos ? 'now' : '';
         bar.appendChild(i);
       });
       stage.appendChild(bar);
+      if (this.review) stage.appendChild(el('p', 'note', '復習：前に間違えた問題をもう一度解きます。'));
 
       this.titleEl = el('h2');
       this.promptEl = el('p', 'prompt');
@@ -4527,6 +4902,7 @@ const NS_LESSON = (() => {
       this.titleEl.style.display = 'none';
       this.promptEl.style.display = 'none';
       this.missedThisStep = false;
+      this.solvedThisStep = false;
       this._runStep();
     }
 
@@ -4546,9 +4922,10 @@ const NS_LESSON = (() => {
         },
         clear() { self.feedbackEl.innerHTML = ''; },
         miss() {
-          if (!self.missedThisStep) {
+          // 解き終わったあとの操作はミスに数えない
+          if (!self.missedThisStep && !self.solvedThisStep) {
             self.missedThisStep = true;
-            store.recordMiss(self.lesson.id, String(self.i));
+            if (self.step.type !== 'teach') store.recordMiss(self.lesson.id, String(self.i));
           }
         },
         solved(msg) { self._solved(msg); },
@@ -4571,35 +4948,41 @@ const NS_LESSON = (() => {
     }
 
     _advance() {
-      if (this.i === this.lesson.steps.length - 1) this._finish();
-      else { this.i++; this.render(); }
+      if (this.pos === this.order.length - 1) this._finish();
+      else { this.pos++; this.render(); }
     }
 
     _solved(msg) {
-      if (this.step.type !== 'teach') {
-        if (!this.missedThisStep) this.correct++;
-        else store.clearReview(this.lesson.id, String(this.i));
+      // 1つの問題で2回以上呼ばれても（対局で2回勝つなど）、正解数は1回だけ数える
+      const first = !this.solvedThisStep;
+      this.solvedThisStep = true;
+      if (first && this.step.type !== 'teach') {
+        if (!this.missedThisStep) {
+          this.correct++;
+          // 一発で解けたら復習リストから外す。間違えたら残して、あとで解き直せるようにする
+          store.clearReview(this.lesson.id, String(this.i));
+        }
+        sfx.correct();
       }
-      if (this.step.type !== 'teach') sfx.correct();
       if (msg) this.ctx().say(msg, 'ok');
-      const last = this.i === this.lesson.steps.length - 1;
+      const last = this.pos === this.order.length - 1;
       this._actions([{
-        label: last ? 'レッスンを終える' : '次へ',
+        label: last ? (this.review ? '復習を終える' : 'レッスンを終える') : '次へ',
         variant: 'tone',
         onClick: () => this._advance(),
       }]);
     }
 
     _finish() {
-      const total = this.lesson.steps.filter((s) => s.type !== 'teach').length || 1;
+      const total = this.order.filter((n) => this.lesson.steps[n].type !== 'teach').length;
       sfx.finish();
-      store.recordLesson(this.lesson.id, { correct: this.correct, total });
-      this.onFinish?.({ correct: this.correct, total });
+      if (!this.review) store.recordLesson(this.lesson.id, { correct: this.correct, total });
+      this.onFinish?.({ correct: this.correct, total, review: this.review });
     }
 
     _runStep() {
       const handler = STEPS[this.step.type];
-      if (!handler) { console.warn('未知のステップ形式:', this.step.type); this.i++; return this.render(); }
+      if (!handler) { console.warn('未知のステップ形式:', this.step.type); return this._advance(); }
       handler(this.ctx());
     }
   }
@@ -4719,10 +5102,13 @@ const NS_LESSON = (() => {
 
     // 将棋で持ち駒があるときは、盤の下に打てる駒を出す
     let dropKind = null, handHost = null;
+    let paintHand = () => {};
     if (game === 'shogi' && Object.keys(s.state.hands?.[s.state.turn] || {}).length) {
       handHost = el('div', 'hand');
       ctx.mount.appendChild(handHost);
-      const paintHand = () => renderHand(handHost, s.state.hands[s.state.turn], {
+      // 失敗してやり直すときも、必ずこの関数で描き直す。
+      // onPick を付けずに描き直すと、二度と持ち駒を選べなくなる。
+      paintHand = () => renderHand(handHost, s.state.hands[s.state.turn], {
         label: 'あなたの持ち駒', order: S.HAND_ORDER, selected: dropKind,
         onPick: (k) => {
           dropKind = dropKind === k ? null : k;
@@ -4762,7 +5148,7 @@ const NS_LESSON = (() => {
       } else {
         ctx.miss();
         ctx.say(`<b>これでは目的を果たせません</b>${s.hint || 'もう一度やってみましょう。'}`, 'ng');
-        setTimeout(() => { from = null; paint(); }, 850);
+        setTimeout(() => { from = null; dropKind = null; paint(); paintHand(); }, 850);
       }
     };
 
@@ -4775,7 +5161,7 @@ const NS_LESSON = (() => {
         board.setPosition(next.board, { [sq]: 'last' });
         sfx.place('shogi');
         const k = dropKind; dropKind = null;
-        if (handHost) renderHand(handHost, s.state.hands[s.state.turn], { label: 'あなたの持ち駒', order: S.HAND_ORDER });
+        paintHand();
         judge({ ...mv, drop: k, next, board: next.board });
         return;
       }
@@ -4990,12 +5376,20 @@ const NS_LESSON = (() => {
     const s = ctx.step;
     const sets = s.sets || 4;
     const hand = s.tiles || (() => {
-      const w = M.randomWinHand({ sets, tanyao: s.tanyao });
+      let w = null;
+      for (let k = 0; k < 20 && !w; k++) w = M.randomWinHand({ sets, tanyao: s.tanyao });
+      if (!w) w = sets === 2 ? ['m2', 'm3', 'm4', 'p7', 'p7', 'p7', 's5', 's5']
+        : ['m1', 'm2', 'm3', 'p4', 'p5', 'p6', 's7', 's8', 's9', 'z1', 'z1', 'z1', 'm5', 'm5'];
       if (Math.random() < 0.5) return w;
-      const broken = [...w];
-      const swap = M.ALL_TILES[(Math.random() * M.ALL_TILES.length) | 0];
-      broken[(Math.random() * broken.length) | 0] = swap;
-      return M.isWin(M.sortTiles(broken), sets) ? w : M.sortTiles(broken);
+      // 1枚だけ入れ替えて崩す。同じ牌が5枚になる入れ替えは選ばない
+      for (let k = 0; k < 30; k++) {
+        const broken = [...w];
+        const swap = M.ALL_TILES[(Math.random() * M.ALL_TILES.length) | 0];
+        broken[(Math.random() * broken.length) | 0] = swap;
+        if (M.toCounts(broken).some((c) => c > 4)) continue;
+        if (!M.isWin(M.sortTiles(broken), sets)) return M.sortTiles(broken);
+      }
+      return w;
     })();
     const truth = M.isWin(hand, sets);
 
@@ -5014,6 +5408,8 @@ const NS_LESSON = (() => {
           const dec = M.decompose(hand, sets)[0];
           const detail = dec
             ? `${dec.sets.map((g) => g.map(M.tileName).join('')).join(' / ')} ＋ 雀頭 ${M.tileName(dec.pair)}`
+            : sets === 4 && M.isChiitoi(hand) ? '七対子（同じ牌2枚×7組）の形です。4面子1雀頭ではありませんが、アガリです。'
+            : sets === 4 && M.isKokushi(hand) ? '国士無双の形です。'
             : 'どう分けても組が足りません。';
           ctx.solved(`<b>正解</b>${detail}`);
         } else {
@@ -5043,6 +5439,7 @@ const NS_LESSON = (() => {
     const wrongs = shuffle(M.ALL_TILES.filter((t) => !answer.includes(t))).slice(0, Math.max(3, 7 - answer.length));
     const candidates = M.sortTiles([...answer, ...wrongs]);
     const picked = new Set();
+    let finished = false;
     const candHost = el('div'); ctx.mount.appendChild(candHost);
 
     const paint = () => {
@@ -5051,7 +5448,7 @@ const NS_LESSON = (() => {
       renderTiles(candHost, candidates, {
         states,
         onPick: (i, t) => {
-          if (picked.has(i)) return;
+          if (picked.has(i) || finished) return;
           picked.add(i); paint();
           if (!answer.includes(t)) {
             ctx.miss();
@@ -5060,6 +5457,7 @@ const NS_LESSON = (() => {
           }
           const hit = candidates.filter((x, j) => picked.has(j) && answer.includes(x));
           if (hit.length === answer.length) {
+            finished = true;
             const types = [...new Set(answer.flatMap((w) => M.waitType(hand, w, sets)))];
             const names = types.map((t) => M.WAIT_TYPES[t]?.ja).filter(Boolean).join('・');
             ctx.solved(`<b>全部そろいました</b>アガリ牌は ${answer.map(M.tileName).join('・')}。${names ? `待ちの形は<strong>${names}</strong>です。` : ''}`);
@@ -5086,8 +5484,18 @@ const NS_LESSON = (() => {
     const s = ctx.step;
     const kinds = s.kinds || ['ryanmen', 'kanchan', 'penchan', 'shanpon', 'tanki'];
     const target = s.kind || kinds[(Math.random() * kinds.length) | 0];
-    const gen = M.randomTenpai({ sets: s.sets || 2, waitTypes: [target], honors: false });
-    if (!gen) { ctx.solved(); return; }
+    // randomTenpai は待ち牌すべての形が target だけになる手を返す（答えが1つに決まる）
+    let gen = null;
+    for (let k = 0; k < 5 && !gen; k++) gen = M.randomTenpai({ sets: s.sets || 2, waitTypes: [target], honors: false });
+    if (!gen) {
+      // 生成に失敗したときの固定問題（正解扱いで飛ばさない）
+      const fixed = {
+        ryanmen: ['m3', 'm4', 'p2', 'p3', 'p4', 's6', 's6'], kanchan: ['m3', 'm5', 'p2', 'p3', 'p4', 's6', 's6'],
+        penchan: ['m1', 'm2', 'p2', 'p3', 'p4', 's6', 's6'], shanpon: ['m5', 'm5', 'p2', 'p3', 'p4', 's6', 's6'],
+        tanki: ['m5', 'p2', 'p3', 'p4', 's6', 's7', 's8'],
+      }[target];
+      gen = { tiles: fixed, waits: M.waits(fixed, 2) };
+    }
     const hand = M.sortTiles(gen.tiles);
 
     ctx.prompt('この手の<strong>待ちの形</strong>はどれでしょう。');
@@ -5125,19 +5533,24 @@ const NS_LESSON = (() => {
     renderTiles(d, hand, { disabled: true, tight: true });
 
     const options = s.options || ['tanyao', 'yakuhai', 'pinfu', 'chiitoi', 'tsumo'];
+    // 選択肢の中に正解がひとつもない手もある。そのときは「役なし」が正解
+    const expect = truth.filter((t) => options.includes(t));
     const box = el('div', 'choices'); box.dataset.cols = '2';
     ctx.mount.appendChild(box);
     const found = new Set();
+    const names = () => (truth.length ? truth.map((t) => M.YAKU_JA[t]?.ja).filter(Boolean).join('・') : '役なし（このままではあがれません）');
+    const done = () => {
+      box.querySelectorAll('.choice').forEach((x) => (x.disabled = true));
+      ctx.solved(`<b>そろいました</b>${names()}`);
+    };
     options.forEach((k) => {
       const y = M.YAKU_JA[k];
       const b = el('button', 'choice', `${y.ja}<span class="lrow__d"><br>${y.desc}</span>`);
       b.addEventListener('click', () => {
-        if (truth.includes(k)) {
+        if (expect.includes(k)) {
           b.dataset.s = 'ok'; b.disabled = true; found.add(k);
-          if (found.size === truth.filter((t) => options.includes(t)).length) {
-            box.querySelectorAll('.choice').forEach((x) => (x.disabled = true));
-            ctx.solved(`<b>そろいました</b>${truth.map((t) => M.YAKU_JA[t]?.ja).filter(Boolean).join('・')}`);
-          } else ctx.say('ほかにもあります。');
+          if (found.size === expect.length) done();
+          else ctx.say('ほかにもあります。');
         } else {
           b.dataset.s = 'ng'; b.disabled = true; ctx.miss();
           ctx.say(`<b>${y.ja}はついていません</b>${y.desc}`, 'ng');
@@ -5145,7 +5558,20 @@ const NS_LESSON = (() => {
       });
       box.appendChild(b);
     });
-    ctx.actions([]);
+    const none = el('button', 'choice', '役なし<span class="lrow__d"><br>この中の役はひとつもつかない</span>');
+    none.addEventListener('click', () => {
+      if (!expect.length) { none.dataset.s = 'ok'; done(); return; }
+      none.dataset.s = 'ng'; none.disabled = true; ctx.miss();
+      ctx.say('<b>役はあります</b>もう一度、条件をひとつずつ確かめてください。', 'ng');
+    });
+    box.appendChild(none);
+    ctx.actions([{
+      label: '答えを見る', variant: 'ghost', onClick: () => {
+        ctx.miss();
+        box.querySelectorAll('.choice').forEach((x) => (x.disabled = true));
+        ctx.solved(`<b>答え</b>${names()}`);
+      },
+    }]);
   };
 
 
@@ -5223,7 +5649,10 @@ const NS_LESSON = (() => {
 
     const commit = (move, after) => {
       const explicit = accept(move);
-      const review = K.explainMove(game, before, after, move, side, cctx);
+      const mate = game === 'chess'
+        ? C.gameStatus(after, side === 'w' ? 'b' : 'w', cctx) === 'checkmate'
+        : S.isMate({ board: after, hands: s.state.hands, turn: S.opponent(side) }, cctx);
+      const review = K.explainMove(game, before, after, move, side, cctx, { mate });
       const good = explicit !== null ? explicit : review.level === 'ok';
       board.setPosition(after, { [move.from]: 'last', [move.to]: 'last' });
       before[move.to] ? sfx.capture(game) : sfx.place(game);
@@ -5235,7 +5664,12 @@ const NS_LESSON = (() => {
       }
       ctx.miss();
       const l = review.lines[0];
-      if (review.level === 'ok') {
+      const stalemate = game === 'chess'
+        && C.gameStatus(after, side === 'w' ? 'b' : 'w', cctx) === 'stalemate';
+      if (stalemate) {
+        ctx.say('<b>ステイルメイトです</b>相手は動ける手がないのに、チェックされていません。これでは引き分けです。'
+          + `${s.hint ? `<br>${s.hint}` : ''}`, 'ng');
+      } else if (review.level === 'ok') {
         // 危険ではないが、この問題で狙ってほしい手ではない
         ctx.say(`<b>その手も悪くありません</b>ただ、ここで見つけてほしいのは別の手です。`
           + `${s.hint ? `<br>${s.hint}` : ''}`, 'ng');
@@ -5350,7 +5784,8 @@ const NS_LESSON = (() => {
          <td>${M.tileName(r.tile)}切り</td>
          <td>${r.shanten === 0 ? 'テンパイ' : `あと${r.shanten}枚`}</td>
          <td>${r.kinds}種 ${r.tiles}枚</td></tr>`).join('');
-    return `<table class="ukeire"><thead><tr><th>切る牌</th><th>アガリまで</th><th>受け入れ</th></tr></thead><tbody>${rows}</tbody></table>`;
+    // シャンテン数は「テンパイまで」の枚数。あがりまではさらに1枚要る
+    return `<table class="ukeire"><thead><tr><th>切る牌</th><th>テンパイまで</th><th>受け入れ</th></tr></thead><tbody>${rows}</tbody></table>`;
   }
 
 
@@ -5365,9 +5800,9 @@ const NS_LESSON = (() => {
 
     let position = game === 'chess' ? { ...s.board } : null;
     let state = game === 'shogi' ? JSON.parse(JSON.stringify(s.state)) : null;
-    let from = null, ply = 0, dropKind = null, handHost = null;
+    let from = null, ply = 0, dropKind = null, handHost = null, busy = false, token = 0;
 
-    ctx.prompt(s.prompt || `<strong>${limit}手</strong>で詰ませてください。相手は best を尽くして逃げます。`);
+    ctx.prompt(s.prompt || `<strong>${limit}手</strong>で詰ませてください。相手は最善を尽くして逃げます。`);
     const info = el('p', 'note');
     ctx.mount.appendChild(info);
 
@@ -5375,9 +5810,10 @@ const NS_LESSON = (() => {
     const paint = (extra = {}) => board.setPosition(pos(), extra);
 
     const reset = () => {
+      token++;
       position = game === 'chess' ? { ...s.board } : null;
       state = game === 'shogi' ? JSON.parse(JSON.stringify(s.state)) : null;
-      from = null; dropKind = null; ply = 0;
+      from = null; dropKind = null; ply = 0; busy = false;
       ctx.clear(); paint(); paintHand();
       info.textContent = `${limit}手詰め。あなたの手番です。`;
     };
@@ -5408,8 +5844,10 @@ const NS_LESSON = (() => {
 
     const fail = (msg) => {
       ctx.miss();
+      busy = true;   // やり直しまでの間は盤を止める
       ctx.say(`<b>${msg}</b>${s.hint ? `<br><span class="note">${s.hint}</span>` : ''}`, 'ng');
-      setTimeout(reset, 1400);
+      const my = ++token;
+      setTimeout(() => { if (my === token) { reset(); ctx.say(`<b>${msg}</b>もう一度どうぞ。${s.hint ? `<br><span class="note">${s.hint}</span>` : ''}`, 'ng'); } }, 1400);
     };
 
     /** 相手の受け。詰まされにくい手を選ぶ */
@@ -5444,16 +5882,24 @@ const NS_LESSON = (() => {
       if (mustCheck && !checking()) {
         return fail('王手が続いていません。詰将棋では毎手かならず王手をかけます。');
       }
-      if (ply >= Math.ceil(limit / 2)) return fail(`${limit}手では詰みませんでした。`);
+      // ply は両者の手数。limit 手目（最後の自分の手）で詰んでいなければ失敗
+      if (ply >= limit) return fail(`${limit}手では詰みませんでした。`);
+      const stuck = game === 'chess' && !C.allLegalMoves(position, foe, opts).length;
+      if (stuck) return fail('相手が動けなくなりました。王手がかかっていないので、チェスではステイルメイト（引き分け）です。');
       info.textContent = '相手が逃げます…';
+      busy = true;
+      const my = ++token;
       setTimeout(() => {
+        if (my !== token) return;
         defend();
         ply++;
+        busy = false;
         info.textContent = `あと${Math.ceil((limit - ply) / 2)}手で詰ませます。`;
       }, 520);
     }
 
     board.onPick = (sq) => {
+      if (busy) return;
       const p = pos();
       if (game === 'shogi' && dropKind) {
         if (!S.legalDrops(state, dropKind, shape).includes(sq)) return;
@@ -5527,16 +5973,18 @@ const NS_LESSON = (() => {
     const ch = el('div'); ctx.mount.appendChild(ch);
 
     const picked = new Set();
+    let finished = false;
     const paint = () => {
       const st = {};
       cands.forEach((t, i) => { if (picked.has(i)) st[i] = MJAI.danger(fake, t, 1) === bestD ? 'ok' : 'ng'; });
       renderTiles(ch, cands, {
         states: st,
         onPick: (i, t) => {
-          if (picked.has(i)) return;
+          if (picked.has(i) || finished) return;
           picked.add(i); paint();
           const d = MJAI.danger(fake, t, 1);
           if (d === bestD) {
+            finished = true;
             const why = d === 0
               ? `${M.tileName(t)}は南家自身が捨てている牌（現物）です。フリテンのルールにより100%当たりません。`
               : `${M.tileName(t)}がこの中ではいちばん安全です。`;
@@ -5544,9 +5992,10 @@ const NS_LESSON = (() => {
           } else {
             ctx.miss();
             ctx.say(`<b>${M.tileName(t)}は危険です</b>${
-              M.isHonor(t) ? '字牌ですが、まだ1枚も見えていません。単騎や双ポンで待たれます。'
-              : Number(t[1]) >= 3 && Number(t[1]) <= 7 ? '3〜7の牌はいちばん当たりやすい牌です。'
-              : '端の牌ですが、現物より危険です。'}`, 'ng');
+              M.isHonor(t) ? `字牌ですが、見えているのは${discards.filter((x) => x === t).length}枚だけです。単騎や双ポンで待たれます。`
+              : Number(t[1]) >= 3 && Number(t[1]) <= 7 ? '3〜7の牌は両面待ちの両側になりやすく、いちばん当たりやすい牌です。'
+              : Number(t[1]) === 2 || Number(t[1]) === 8 ? '2と8は、3〜7の次に当たりやすい牌です。'
+              : '1と9は端の牌で比較的安全ですが、現物ではありません。'}`, 'ng');
           }
         },
       });
@@ -5560,13 +6009,117 @@ const NS_LESSON = (() => {
     } }]);
   };
 
+
+  /**
+   * 目標の形ができるまで、自由に指す。
+   * 「囲いを組む」のように、手順ではなく形を覚えてほしいときに使う。
+   */
+  STEPS.build = (ctx) => {
+    const s = ctx.step;
+    const shape = s.shape || S.BIG;
+    const limit = s.limit || 12;
+    let state = JSON.parse(JSON.stringify(s.state || S.startBig()));
+    let from = null, moves = 0, done = false, token = 0;
+
+    ctx.prompt(s.prompt);
+    const { board } = boardSpec(ctx, { ...s, shape });
+    const status = el('p', 'note');
+    const checklist = el('ul', 'checks');
+    ctx.mount.append(checklist, status);
+
+    const paint = (extra = {}) => board.setPosition(state.board, extra);
+
+    /** 目標がどこまで達成できたか */
+    const progress = () => (s.checks || []).map((c) => ({ label: c.label, ok: c.test(state, shape) }));
+
+    const paintChecks = () => {
+      const p = progress();
+      checklist.innerHTML = p.map((x) =>
+        `<li data-ok="${x.ok ? 1 : ''}">${x.ok ? '✓' : '○'} ${x.label}</li>`).join('');
+      return p;
+    };
+
+    const reset = () => {
+      token++;   // 考え中の相手の手を捨てる
+      state = JSON.parse(JSON.stringify(s.state || S.startBig()));
+      from = null; moves = 0; done = false;
+      ctx.clear(); paint(); paintChecks();
+      status.textContent = `${limit}手以内に形を作ってください。（0/${limit}手）`;
+      ctx.actions([{ label: '最初から', variant: 'ghost', onClick: () => { reset(); bind(); } }]);
+    };
+
+    const afterMove = () => {
+      moves++;
+      const p = paintChecks();
+      if (p.every((x) => x.ok)) {
+        done = true; board.onPick = null;
+        ctx.solved(`<b>できました</b>${moves}手で形になりました。${s.why || ''}`);
+        return;
+      }
+      if (moves >= limit) {
+        ctx.miss();
+        ctx.say(`<b>${limit}手では組めませんでした</b>できていない項目を見て、もう一度やってみましょう。`
+          + `${s.hint ? `<br><span class="note">${s.hint}</span>` : ''}`, 'ng');
+        board.onPick = null;
+        ctx.actions([
+          { label: 'もう一度', variant: 'tone', onClick: () => { reset(); bind(); } },
+          { label: '次へ進む', variant: 'ghost', onClick: () => ctx.solved() },
+        ]);
+        return;
+      }
+      status.textContent = `（${moves}/${limit}手）`;
+      // 相手も1手指す（自陣を組むだけなので、相手は静かに駒を動かす）
+      if (s.opponent === false) { state = { ...state, turn: 'b' }; return; }   // 相手なしなら手番を戻す
+      const my = token;
+      setTimeout(() => {
+        if (my !== token) return;
+        const mv = S.pickMove(state, shape, 1);
+        if (mv) {
+          state = S.applyMove(state, mv, shape);
+          paint({ ...(mv.from ? { [mv.from]: 'last' } : {}), [mv.to]: 'last' });
+          paintChecks();
+        } else state = { ...state, turn: 'b' };   // 相手が指せないときも手番を戻す
+      }, 380);
+    };
+
+    function bind() {
+      board.onPick = (sq) => {
+        if (done) return;
+        const mine = (x) => state.board[x] && S.colorOf(state.board[x]) === 'b';
+        const targets = (x) => S.legalMovesFrom(state, x, shape).map((m) => m.to);
+        if (from === null) {
+          if (!mine(sq)) return;
+          from = sq;
+          const m = { [sq]: 'sel' };
+          for (const t of targets(sq)) m[t] = 'move';
+          paint(m);
+          return;
+        }
+        if (sq === from) { from = null; paint(); return; }
+        if (!targets(from).includes(sq)) {
+          if (mine(sq)) { from = sq; const m = { [sq]: 'sel' }; for (const t of targets(sq)) m[t] = 'move'; paint(m); }
+          return;
+        }
+        const cands = S.legalMovesFrom(state, from, shape).filter((m) => m.to === sq);
+        state = S.applyMove(state, cands.find((m) => !m.promote) || cands[0], shape);
+        sfx.place('shogi');
+        paint({ [from]: 'last', [sq]: 'last' });
+        from = null;
+        afterMove();
+      };
+    }
+
+    reset(); bind();
+  };
+
   // --- 共通ヘルパ ----------------------------------------------------------
   function boardSpec(ctx, s) {
     const host = ctx.boardHost();
     if (ctx.lesson.game === 'chess') {
       const w = s.w || 8, h = s.h || 8;
       const board = new Board(host, { variant: 'chess', w, h, coords: s.coords ?? true });
-      return { board, opts: { w, h }, shape: null };
+      // s.castle があればキャスリングを指せる（キャスリングを練習する問題用）
+      return { board, opts: { w, h, ...(s.castle ? { castle: s.castle } : {}) }, shape: null };
     }
     const shape = s.shape || S.BIG;
     const board = new Board(host, { variant: 'shogi', w: shape.w, h: shape.h, coords: s.coords ?? true });
@@ -5608,8 +6161,8 @@ const NS_DCHESS = (() => {
             steps: [
               {
                 type: 'teach', title: '64のマスに名前がついている',
-                body: `<p>チェス盤は8×8で64マス。横の列を<strong>ファイル</strong>といって左から a〜h、
-                  縦の列を<strong>ランク</strong>といって手前から 1〜8 と数えます。</p>
+                body: `<p>チェス盤は8×8で64マス。縦の列を<strong>ファイル</strong>といって、左から a〜h の文字で呼びます。
+                  横の段を<strong>ランク</strong>といって、手前から 1〜8 の数字で呼びます。</p>
                   <p>マスの名前は、この2つを組み合わせるだけです。左下の角なら a1、その右が b1。
                   覚えなくても遊べますが、知っていると人に手を教わるときに一気に楽になります。</p>`,
                 board: { position: { a1: 'R', h8: 'r' }, marks: { a1: 'hint', h8: 'hint' } },
@@ -5628,6 +6181,11 @@ const NS_DCHESS = (() => {
                   逆に置いてしまうと、あとで出てくるキングとクイーンの位置が左右で入れ替わってしまいます。</p>
                   <p>もうひとつ。チェスは<strong>白が先手</strong>です。</p>`,
                 board: { position: {}, marks: { h1: 'hint' } },
+              },
+              {
+                type: 'targets', from: 'd4', board: { d4: 'K' }, coords: true,
+                prompt: '触って確かめましょう。d4のキングが行けるマスを全部タップしてください。',
+                why: 'タップしたマスの名前を意識すると、c3・d5といった座標が自然に身につきます。',
               },
             ],
           },
@@ -5774,7 +6332,7 @@ const NS_DCHESS = (() => {
               },
               {
                 type: 'solitaire', w: 4, h: 4,
-                board: { a1: 'N', c2: 'P', d4: 'B', b4: 'p' },
+                board: { a1: 'N', c2: 'P', d1: 'B', b1: 'R' },
                 prompt: 'ナイトのL字で取りきってください。順番をまちがえると手詰まりになります。',
               },
             ],
@@ -5814,7 +6372,7 @@ const NS_DCHESS = (() => {
               },
               {
                 type: 'move', side: 'w',
-                board: { b7: 'P', h1: 'K', a8: 'k' }, goal: { to: 'b8' },
+                board: { b7: 'P', h1: 'K', f6: 'k' }, goal: { to: 'b8' },
                 prompt: 'このポーンを昇格させてください。b8に進めます。',
                 why: 'b8に着いた瞬間、ポーンはクイーンになりました。',
               },
@@ -5851,6 +6409,14 @@ const NS_DCHESS = (() => {
                 ],
                 answer: 0,
                 why: '6対6でほぼ互角。こういう計算がその場でできると、交換に迷わなくなります。',
+              },
+              {
+                type: 'bestmove', side: 'w', coords: true,
+                board: { e1: 'K', g8: 'k', d4: 'R', d7: 'n', a4: 'p', h8: 'r' },
+                answers: [{ from: 'd4', to: 'd7' }],
+                prompt: 'いちばん得をする手を指してください。',
+                hint: '相手の駒で、誰にも守られていないものを探します。点数の高いほうが得です。',
+                why: 'ナイトは3点、ポーンは1点。守られていないほうを、より高い点数のほうから取ります。',
               },
             ],
           },
@@ -5935,7 +6501,8 @@ const NS_DCHESS = (() => {
                   この状態を<strong>ステイルメイト</strong>といい、<strong>引き分け</strong>になります。</p>
                   <p>これは初心者がいちばん悔しい思いをする場所です。
                   駒が圧倒的に多いのに、相手のキングの逃げ道を全部ふさいでしまって引き分け、ということが本当によく起きます。</p>
-                  <p>大差がついたら、<strong>詰ませる直前にわざと1マス空けておく</strong>。これを覚えておいてください。</p>`,
+                  <p>大差がついたら、<strong>王手をかけないまま逃げ道を全部ふさがない</strong>。
+                  相手のキングに1マス逃げ場を残しておき、最後は王手で仕留めます。</p>`,
                 board: { position: { a8: 'k', b6: 'K', c7: 'Q' }, marks: { a8: 'hint' } },
               },
               {
@@ -5947,7 +6514,17 @@ const NS_DCHESS = (() => {
                   { t: '黒はまだ動ける', why: 'a7・b7・b8はすべて白に押さえられていて、黒はキングしかいません。' },
                 ],
                 answer: 0,
-                why: 'クイーンが c7 ではなく c6 にいれば、次の手で詰ませられました。1マスの差で勝ちが消えます。',
+                why: 'Qc7 は逃げ道を全部消したのに、王手をかけていませんでした。同じ場面で Qb7 や Qa7 と王手で入っていれば詰みでした。1マスの差で勝ちが消えます。',
+              },
+              {
+                type: 'bestmove', side: 'w', coords: true,
+                board: { a8: 'k', b6: 'K', h7: 'Q' },
+                // 詰みは h8・g8（8段目で王手）と b7・a7（キングが守る）の4つだけ。c7 はステイルメイト
+                answers: [{ from: 'h7', to: 'b7' }, { from: 'h7', to: 'a7' },
+                  { from: 'h7', to: 'h8' }, { from: 'h7', to: 'g8' }],
+                prompt: '黒のキングはa8にいます。1手でチェックメイトにしてください。',
+                hint: 'キングがb6にいるので、a7・b7・b8はすでに封じられています。クイーンで8段目か7段目を止めます。',
+                why: 'ステイルメイトを避けるには、詰ませる手をきちんと選ぶこと。「王手をかけずに逃げ道だけ消す」のが危険です。',
               },
             ],
           },
@@ -5980,6 +6557,7 @@ const NS_DCHESS = (() => {
                 type: 'teach', title: '小さい盤で、最後まで',
                 body: `<p>4×4の盤で、キング・ルーク・ポーン2枚ずつ。数分で終わりますが、
                   チェックもチェックメイトも本物です。</p>
+                  <p>盤が小さいので、ポーンの「最初だけ2マス」はありません。いつも1マスずつ進みます。</p>
                   <p>考えることは3つだけ。<strong>相手に取られる場所に置かない。相手の駒を狙う。キングの逃げ道を見る。</strong></p>`,
               },
               { type: 'play', variant: 'mini', prompt: 'あなたは白（下側）です。相手のキングを詰ませてください。' },
@@ -5997,7 +6575,7 @@ const NS_DCHESS = (() => {
                   いまチェックされていない／キングが通るマスも着くマスも攻撃されていない。</p>
                   <p>目的は<strong>キングを安全な隅に隠して、同時にルークを働かせる</strong>ことです。
                   実戦ではほぼ毎局やります。</p>`,
-                board: { position: { e1: 'K', h1: 'R', g1: 'K' }, marks: { f1: 'hint', g1: 'target' } },
+                board: { position: { e1: 'K', h1: 'R' }, marks: { g1: 'target', f1: 'hint' } },
               },
               {
                 type: 'teach', title: 'アンパッサン',
@@ -6005,7 +6583,8 @@ const NS_DCHESS = (() => {
                   その直後の1手にかぎり、「1マスしか進まなかったもの」とみなして斜めに取れます。</p>
                   <p>2マス進みで素通りするのはずるい、という調整のために作られたルールです。
                   <strong>次の手ですぐ取らないと権利は消えます。</strong></p>
-                  <p>出番は多くありません。「そういうものがある」と知っていれば十分です。</p>`,
+                  <p>出番は多くありません。「そういうものがある」と知っていれば十分です。
+                  このアプリの本物の盤での対局では、キャスリングもアンパッサンも指せます。</p>`,
                 board: { position: { e5: 'P', d5: 'p' }, marks: { d6: 'target', d5: 'hint' } },
               },
               {
@@ -6018,6 +6597,15 @@ const NS_DCHESS = (() => {
                 answer: 0,
                 why: 'チェック中はできません。また、キングが通るマスが攻撃されていてもできません。ルークの側には制限がないのがポイントです。',
               },
+              {
+                type: 'move', side: 'w', coords: true,
+                board: { e1: 'K', h1: 'R', a1: 'R', e8: 'k', d5: 'P', e4: 'P' },
+                castle: { w: { k: true, q: true }, b: { k: false, q: false } },
+                goal: { from: 'e1', to: 'g1' },
+                prompt: 'キャスリングしてみましょう。キングをタップして、2マス右の<strong>g1</strong>へ動かしてください。ルークは自動でf1へ移ります。',
+                hint: 'キングを選ぶと、g1とc1にも印が出ます。今回はキング側（g1）です。',
+                why: 'キングがg1、ルークがf1へ。1手で守りと展開を同時にやる特別な手です。',
+              },
             ],
           },
           {
@@ -6029,7 +6617,7 @@ const NS_DCHESS = (() => {
                 body: `<p>最後は32枚の盤です。開始直後にやることは、覚えることを増やさなくても言えます。</p>
                   <p><strong>1. 中央のポーンを進める</strong>（e4 か d4）。中央を取ると全部の駒が働きやすくなります。<br>
                   <strong>2. ナイトとビショップを前に出す</strong>。奥にしまったままの駒は0点と同じです。<br>
-                  <strong>3. キャスリングしてキングを隅へ</strong>。</p>
+                  <strong>3. キャスリングしてキングを隅へ</strong>（キングをタップして2マス横へ動かします）。</p>
                   <p>この3つを10手くらいかけてやる。それだけで序盤は形になります。</p>`,
               },
               { type: 'play', variant: 'full', goals: ['chess.opening'],
@@ -6105,26 +6693,28 @@ const NS_DCHESS = (() => {
               },
               {
                 type: 'bestmove', side: 'w', coords: true,
-                board: { g1: 'K', g8: 'k', d8: 'q', b8: 'r', c6: 'N', a2: 'P' },
-                answers: [{ from: 'c6', to: 'e7' }, { from: 'c6', to: 'a7' }],
+                board: { g1: 'K', g8: 'k', c8: 'q', d5: 'N', a2: 'P', f7: 'p', g7: 'p', h7: 'p' },
+                answers: [{ from: 'd5', to: 'e7' }],
                 prompt: 'ナイトで両取りをかけてください。',
-                hint: 'クイーンとキング、あるいはクイーンとルーク。2枚同時に届く場所を探します。',
+                hint: 'キングとクイーン。ナイトが1手で、g8とc8の両方に届く場所を探します。',
                 why: 'ナイトの両取りは一度見えるようになると、面白いように見つかります。',
               },
               {
                 type: 'teach', title: 'ポーンのフォークもある',
                 body: `<p>フォークはナイトだけのものではありません。<strong>ポーン</strong>は斜め前2マスを攻撃するので、
                   そこに敵の駒が2枚並んでいれば、それだけで両取りです。</p>
-                  <p>しかもポーンは1点。相手はナイトやビショップを守りようがなく、逃げるしかありません。
-                  <strong>いちばん安い駒でいちばん高い駒を狙う</strong>のが、フォークの本質です。</p>`,
-                board: { position: { d5: 'P', c6: 'n', e6: 'b' }, marks: { c6: 'ng', e6: 'ng', d5: 'sel' } },
+                  <p>しかもポーンは1点。相手は2枚を同時に逃がせないので、どちらかを取られます。
+                  <strong>いちばん安い駒で高い駒を狙う</strong>のが、フォークの本質です。</p>
+                  <p>ただし、進んだポーンがその場で取られるなら両取りになりません。
+                  下の図のナイトとルークは、どちらもd5のポーンを取れません。</p>`,
+                board: { position: { d5: 'P', c6: 'n', e6: 'r' }, marks: { c6: 'ng', e6: 'ng', d5: 'sel' } },
               },
               {
                 type: 'bestmove', side: 'w', coords: true,
-                board: { e1: 'K', e8: 'k', d4: 'P', c6: 'n', e6: 'b' },
+                board: { g1: 'K', g8: 'k', d4: 'P', c3: 'P', c6: 'n', e6: 'r' },
                 answers: [{ from: 'd4', to: 'd5' }],
                 prompt: 'ポーンを進めて、両取りをかけてください。',
-                why: 'd5に進んだポーンが、ナイトとビショップの両方を狙います。1点で3点をもらえます。',
+                why: 'd5に進んだポーンが、ナイトとルークの両方を狙います。しかもそのポーンを取れる駒がいません。1点の駒で3点か5点をもらえます。',
               },
             ],
           },
@@ -6134,7 +6724,7 @@ const NS_DCHESS = (() => {
             steps: [
               {
                 type: 'teach', title: 'ピン——動くと後ろの駒がやられる',
-                body: `<p><strong>ピン（串刺し）</strong>は、ルーク・ビショップ・クイーンのように
+                body: `<p><strong>ピン（釘付け）</strong>は、ルーク・ビショップ・クイーンのように
                   <strong>直線に走る駒</strong>だけが作れる形です。</p>
                   <p>敵の駒の<strong>後ろに、もっと大事な駒がある</strong>ときに、その線上から攻撃します。
                   前の駒が動くと後ろがやられるので、<strong>相手はその駒を動かせなくなります</strong>。</p>
@@ -6153,18 +6743,18 @@ const NS_DCHESS = (() => {
               },
               {
                 type: 'teach', title: 'スキュア——ピンの裏返し',
-                body: `<p><strong>スキュア</strong>はピンと同じ形ですが、<strong>大事な駒が前</strong>にあります。</p>
+                body: `<p><strong>スキュア（串刺し）</strong>はピンと同じ形ですが、<strong>大事な駒が前</strong>にあります。</p>
                   <p>前の大事な駒はチェックなどで必ず逃げます。すると<strong>後ろの駒が残されて、取れます</strong>。</p>
                   <p>ピンは「動けなくする」、スキュアは「動かして後ろを取る」。形は同じで、順番が逆です。</p>`,
                 board: { position: { e8: 'k', e5: 'q', e1: 'R' }, marks: { e8: 'ng', e5: 'ng', e1: 'sel' } },
               },
               {
                 type: 'bestmove', side: 'w', coords: true,
-                board: { g1: 'K', h8: 'k', a8: 'r', b2: 'B', c3: 'P' },
-                answers: [{ from: 'b2', to: 'c1' }, { from: 'b2', to: 'a3' }, { from: 'b2', to: 'a1' }],
-                prompt: 'ビショップを安全な場所へ動かしてください。いま取られる形になっています。',
-                hint: 'a8のルークが、b2のビショップまで届いていないか確かめてください。',
-                why: '危ない駒に気づいて逃がす。地味ですが、これができるだけで負けが減ります。',
+                board: { g1: 'K', a1: 'R', d4: 'k', h4: 'q', h2: 'P', g2: 'P' },
+                answers: [{ from: 'a1', to: 'a4' }],
+                prompt: '<strong>スキュア</strong>をかけてください。ルークでキングに王手をかけ、後ろの駒を取れる形にします。',
+                hint: '黒のキングとクイーンが、同じ横の段（4段目）に並んでいます。',
+                why: 'a4からの王手でキングは逃げるしかなく、後ろのh4のクイーンがルークで取れます。',
               },
             ],
           },
@@ -6213,6 +6803,18 @@ const NS_DCHESS = (() => {
                   <strong>ポーンを守りながら前進する</strong>頼もしい戦力になります。</p>
                   <p>終盤で「キングを動かす手がもったいない」と思って隅に置いたままにするのは、
                   駒を1枚捨てているのと同じです。</p>`,
+              },
+              {
+                type: 'bestmove', side: 'w', coords: true,
+                board: { e1: 'K', b1: 'N', g1: 'N', c1: 'B', f1: 'B', d1: 'Q', a1: 'R', h1: 'R',
+                  a2: 'P', b2: 'P', c2: 'P', d2: 'P', e4: 'P', f2: 'P', g2: 'P', h2: 'P',
+                  e8: 'k', e5: 'p', b8: 'n', g8: 'n', c8: 'b', f8: 'b', d8: 'q', a8: 'r', h8: 'r',
+                  a7: 'p', b7: 'p', c7: 'p', d7: 'p', f7: 'p', g7: 'p', h7: 'p' },
+                answers: [{ from: 'g1', to: 'f3' }, { from: 'b1', to: 'c3' }, { from: 'f1', to: 'c4' },
+                  { from: 'f1', to: 'b5' }, { from: 'f1', to: 'd3' }, { from: 'f1', to: 'e2' }],
+                prompt: '中央のポーンはもう進めました。<strong>次にやること</strong>を1手指してください。',
+                hint: 'まだ初期位置から一度も動いていない駒を探します。ナイトが先、そのあとビショップです。',
+                why: '序盤の3つ——中央・展開・キャスリング。中央が済んだら、次は駒を出す番です。',
               },
             ],
           },
@@ -6270,8 +6872,8 @@ const NS_DCHESS = (() => {
                   3. 相手キングが端まで来たら、ルークをその端の列に下ろして詰み</p>
                   <p>大事なのは<strong>2つのキングが向き合う形</strong>を作ることです。
                   この形になると、相手キングは逃げ道を失います。</p>
-                  <p>ここで気をつけるのが<u>ステイルメイト</u>。詰ませる直前、
-                  相手キングに1マスだけ逃げ場を残しておくのを忘れないでください。</p>`,
+                  <p>ここで気をつけるのが<u>ステイルメイト</u>。王手をかけずに逃げ道だけを全部ふさぐと引き分けです。
+                  最後の1マスは、<strong>王手をかける手でふさぐ</strong>ようにしてください。</p>`,
                 board: { position: { a8: 'k', b6: 'K', h7: 'R' }, marks: { a8: 'ng', b6: 'sel', h7: 'hint' } },
               },
               {
@@ -6317,7 +6919,7 @@ const NS_DCHESS = (() => {
               {
                 type: 'teach', title: '2. 4手詰め（スカラーズメイト）',
                 body: `<p>初心者だけが引っかかる、有名な速攻があります。
-                  クイーンとビショップで<strong>f7（黒のf2）の1点</strong>を狙う手です。</p>
+                  クイーンとビショップで<strong>黒のf7（白から見ればf2）の1点</strong>を狙う手です。</p>
                   <p>f7とf2は、開始時に<u>キングだけが守っている</u>唯一の弱点です。
                   ここに2枚集められると、一発で詰みます。</p>
                   <p>防ぎ方は簡単です。<strong>相手のクイーンが出てきたら、f7に何枚利いているか数える。</strong>
@@ -6327,7 +6929,7 @@ const NS_DCHESS = (() => {
               },
               {
                 type: 'danger', side: 'w', coords: true,
-                board: { e1: 'K', e8: 'k', f3: 'N', d5: 'B', g5: 'p', c6: 'n', h3: 'R' },
+                board: { e1: 'K', e8: 'k', f3: 'N', d5: 'B', g4: 'p', c6: 'n', h3: 'R' },
                 prompt: '取られてしまう自分の駒を全部タップしてください。',
                 why: 'こうして毎手確認する癖がつけば、落とし穴のほとんどは避けられます。',
               },
@@ -6445,7 +7047,7 @@ const NS_DCHESS = (() => {
                   <p>実戦での使い方は単純です。<strong>交換するとき、自分のポーンの形が悪くならない方を選ぶ。</strong>
                   同じ価値の交換なら、形が良くなる方が得です。</p>`,
                 board: {
-                  position: { a4: 'P', c4: 'P', e2: 'P', e3: 'P', h5: 'P', b7: 'p', g7: 'p' },
+                  position: { a4: 'P', c4: 'P', e2: 'P', e3: 'P', h5: 'P', b7: 'p', d7: 'p' },
                   marks: { c4: 'hint', e2: 'ng', e3: 'ng', h5: 'ok' },
                 },
               },
@@ -6512,7 +7114,7 @@ const NS_DCHESS = (() => {
                 board: { g1: 'K', g8: 'k', a1: 'R', a2: 'P', d4: 'P', e7: 'p', f7: 'p', g7: 'p' },
                 answers: [{ from: 'a1', to: 'b1' }, { from: 'a1', to: 'c1' }, { from: 'a1', to: 'e1' }, { from: 'a1', to: 'f1' }],
                 prompt: 'ルークを、いちばんよく働く場所へ動かしてください。',
-                hint: 'a列は自分のポーンでふさがっています。ポーンのない列はどこでしょう。',
+                hint: 'a列は自分のポーンでふさがっています。自分のポーンがない列はどこでしょう（相手のポーンだけの列も、相手のポーンを狙えるので良い場所です）。',
                 why: '自分のポーンに前をふさがれた駒は働けません。開いた筋に移すだけで価値が変わります。',
               },
             ],
@@ -6551,6 +7153,20 @@ const NS_DCHESS = (() => {
                 ],
                 answer: 0,
                 why: '働いていない駒を、働いている駒と交換する。これが「点数が同じでも得な交換」です。',
+              },
+              {
+                type: 'bestmove', side: 'w', coords: true,
+                board: { g1: 'K', g8: 'k', d4: 'N', e6: 'p', f7: 'p', b5: 'p', g7: 'p', h7: 'p', a1: 'R' },
+                answers: [{ from: 'd4', to: 'b5' }],
+                prompt: '交換の判断です。ナイトで取れるポーンが2つあります。いちばん良い手を指してください。',
+                hint: '取れる駒があっても、取り返される場所なら損です。守りの枚数を数えてください。',
+                why: '守られている駒を安易に取ると損をします。「攻めの枚数 > 守りの枚数」を確かめてから取ります。',
+              },
+              {
+                type: 'danger', side: 'w', coords: true,
+                board: { g1: 'K', g8: 'k', d4: 'N', c5: 'p', f3: 'B', h5: 'q', a1: 'R', e2: 'P' },
+                prompt: '交換の前に、取られる駒がないかを確認します。危ない駒を全部タップしてください。',
+                why: '交換の判断は「取れるか」だけではありません。自分の駒が無事かも同時に見ます。',
               },
             ],
           },
@@ -6641,6 +7257,12 @@ const NS_DSHOGI = (() => {
                 ],
                 answer: 0,
                 why: '自分から見て、先がこちらを向いている＝相手の駒。この一点だけ押さえれば盤面が読めます。',
+              },
+              {
+                type: 'targets', shape: BIG, from: '55', board: { '55': 'K', '45': 'g' }, coords: true,
+                prompt: '実際に触ってみましょう。中央の玉が行けるマスを全部タップしてください。',
+                hint: '玉は8方向に1マス。ただし味方の駒がいるマスには行けません。',
+                why: '4五に味方の金がいるので、そこへは行けません。盤は見るだけでなく、触ると早く覚えます。',
               },
             ],
           },
@@ -6776,7 +7398,7 @@ const NS_DSHOGI = (() => {
                 type: 'targets', shape: BIG, from: '19', board: { '19': 'L', '15': 'p', '17': 'P' },
                 prompt: '味方の歩と敵の歩があります。香車が行けるマスをタップしてください。',
                 hint: '味方の手前で止まります。跳び越えはできません。',
-                why: '味方（1七の歩）に前をふさがれると、香車は1マスも動けなくなります。',
+                why: '1八の1マスだけです。味方（1七の歩）の手前で止まるので、その先の敵の歩（1五）には届きません。',
               },
             ],
           },
@@ -6968,7 +7590,7 @@ const NS_DSHOGI = (() => {
               },
               {
                 type: 'move', shape: BIG, goal: 'mate',
-                state: { board: { '12': 'k', '24': 'S', '13': 'G', '99': 'K' }, hands: { b: { G: 1 }, w: {} }, turn: 'b' },
+                state: { board: { '11': 'k', '21': 'S', '14': 'G', '99': 'K' }, hands: { b: { G: 1 }, w: {} }, turn: 'b' },
                 prompt: 'もう1問。1手詰めです。',
                 hint: '玉の逃げ道を1つずつ数えてから打ちましょう。',
                 why: '詰将棋は「逃げ道を先に数える」のが全てです。数えてから手を考えると、格段に速くなります。',
@@ -7077,14 +7699,14 @@ const NS_DSHOGI = (() => {
               {
                 type: 'teach', title: '美濃囲い',
                 body: `<p>覚える囲いは<strong>1つで十分</strong>です。おすすめは<strong>美濃囲い</strong>。
-                  手数が少なく、横からの攻めにとても強い形です。</p>
-                  <p>玉を2八へ、金を3八と5八へ、銀を3九へ。それだけです。</p>
+                  手数が少なく、横からの攻めにとても強い形です。飛車を左に振ったとき（振り飛車）に、右側に組みます。</p>
+                  <p>玉を2八へ、銀を3八へ、金を4九と5八へ。それだけです。</p>
                   <p>大事なのは形を覚えることではなく、<strong>玉のまわりに金と銀が3枚寄っている</strong>という状態です。
                   この3枚が離れていると、どんな囲いも一瞬で崩れます。</p>`,
                 board: {
                   shape: BIG, coords: true,
-                  position: { '28': 'K', '38': 'G', '58': 'G', '39': 'S', '27': 'P', '37': 'P', '47': 'P' },
-                  marks: { '28': 'hint', '38': 'hint', '58': 'hint', '39': 'hint' },
+                  position: { '28': 'K', '38': 'S', '49': 'G', '58': 'G', '27': 'P', '37': 'P', '47': 'P', '68': 'R' },
+                  marks: { '28': 'hint', '38': 'hint', '49': 'hint', '58': 'hint' },
                 },
               },
               {
@@ -7107,6 +7729,33 @@ const NS_DSHOGI = (() => {
                 answer: 0,
                 why: '金銀3枚が玉のそばにある。これさえ満たしていれば、多少形が崩れても実戦では十分戦えます。',
               },
+              {
+                type: 'build', shape: BIG, limit: 12, coords: true,
+                prompt: '実際に組んでみましょう。まず飛車を左に振り（振り飛車）、そのあと玉を右へ。<strong>12手以内</strong>に、下の4つを満たしてください。',
+                hint: '飛車を2八から6八へ横に動かします（途中のマスは空いています）。そのあと玉を 5九→4八→3八→2八 と運びます。',
+                why: '手順を暗記する必要はありません。「飛車と反対側へ玉を運び、金銀を寄せる」だけで囲いになります。',
+                checks: [
+                  { label: '飛車を左側（6〜9筋）へ振る',
+                    test: (st) => Number(Object.entries(st.board).find(([, p]) => p === 'R')?.[0]?.[0] || 0) >= 6 },
+                  { label: '玉を2八か3八まで動かす',
+                    test: (st) => ['28', '38'].includes(Object.entries(st.board).find(([, p]) => p === 'K')?.[0]) },
+                  { label: '玉と飛車を3筋以上はなす',
+                    test: (st) => {
+                      const k = Object.entries(st.board).find(([, p]) => p === 'K')?.[0];
+                      const r = Object.entries(st.board).find(([, p]) => p === 'R')?.[0];
+                      return k && r && Math.abs(Number(k[0]) - Number(r[0])) >= 3;
+                    } },
+                  { label: '玉のまわり2マス以内に金銀を2枚集める',
+                    test: (st) => {
+                      const k = Object.entries(st.board).find(([, p]) => p === 'K')?.[0];
+                      if (!k) return false;
+                      return Object.entries(st.board).filter(([sq, p]) =>
+                        ['G', 'S'].includes(p) &&
+                        Math.abs(Number(sq[0]) - Number(k[0])) <= 2 &&
+                        Math.abs(Number(sq[1]) - Number(k[1])) <= 2).length >= 2;
+                    } },
+                ],
+              },
             ],
           },
           {
@@ -7122,7 +7771,7 @@ const NS_DSHOGI = (() => {
               },
               {
                 type: 'teach', title: '垂れ歩',
-                body: `<p>相手陣の<strong>1つ手前に歩を打つ</strong>手です。次に成れば「と金」になります。</p>
+                body: `<p>相手陣（向こう側の3段）の<strong>1つ手前に歩を打つ</strong>手です。次に1マス進めば敵陣に入り、成って「と金」になります。</p>
                   <p>相手は放っておけません。と金は金と同じ強さなのに、元は歩。
                   <strong>取られても歩1枚しか損しない</strong>ので、攻める側が一方的に得をします。</p>
                   <p>「攻め手がない」と思ったら、まず相手陣の手前に歩が垂らせないかを探してください。</p>`,
@@ -7130,16 +7779,17 @@ const NS_DSHOGI = (() => {
               },
               {
                 type: 'teach', title: '割り打ちの銀',
-                body: `<p>相手の<strong>金と金（または金と飛車）の間に銀を打つ</strong>手です。</p>
-                  <p>銀は斜め後ろにも利くので、両方を同時に狙えます。相手はどちらか片方しか守れません。
+                body: `<p>斜めに離れて並んだ相手の<strong>金と金（または金と飛車）の間の、少し奥に銀を打つ</strong>手です。</p>
+                  <p>銀は<strong>斜め後ろにも利く</strong>ので、打った銀の斜め後ろにある2枚を同時に狙えます。
+                  しかも金は斜め後ろに下がれないので、その銀を取れません。相手はどちらか片方しか逃がせません。
                   チェスのフォークと同じ考え方です。</p>
                   <p>持ち駒に銀が入ったら、相手陣に「打てば両取りになるマス」がないか探す癖をつけてください。</p>`,
-                board: { shape: BIG, position: { '61': 'g', '41': 'g', '51': 'k' }, marks: { '52': 'target' }, coords: true },
+                board: { shape: BIG, position: { '63': 'g', '43': 'g', '21': 'k' }, marks: { '52': 'target', '63': 'ng', '43': 'ng' }, coords: true },
               },
               {
                 type: 'teach', title: '金はナナメに誘え',
-                body: `<p>金は後ろの斜めに行けません。だから<strong>金の斜め後ろに駒を打つ</strong>と、
-                  金はその駒を取れず、逃げるしかなくなります。</p>
+                body: `<p>金は後ろの斜めに下がれません。だから<strong>金を斜め前に誘い出す</strong>（駒を捨てて取らせる、など）と、
+                  金は元の場所へ戻れなくなり、玉のそばの守りに穴があきます。「金はナナメに誘え」はこの意味です。</p>
                   <p>相手の駒の<u>行けない方向</u>を突く。これが手筋の基本の考え方です。
                   桂は前2か所しか行けない、香は前だけ、角は斜めだけ——
                   すべて「行けない方向」に弱点があります。</p>`,
@@ -7153,6 +7803,22 @@ const NS_DSHOGI = (() => {
                 ],
                 answer: 0,
                 why: '攻めは歩から。大駒は歩で道を作ってから使います。「歩のない攻めは切れる」と言われるくらいです。',
+              },
+              {
+                type: 'move', shape: BIG, coords: true,
+                state: { board: { '59': 'K', '51': 'k', '41': 'g', '61': 'g' }, hands: { b: { P: 1 }, w: {} }, turn: 'b' },
+                goal: (r) => r.drop === 'P' && r.to === '54',
+                prompt: '<strong>垂れ歩</strong>を打ってみましょう。相手陣の1つ手前、5四に歩を打ってください。',
+                hint: '下の持ち駒の「歩」をタップしてから、5四をタップします。',
+                why: '次に5三へ進めば、敵陣に入ったところで成って「と金」になります。歩1枚で金と同じ働きの駒が作れるので、相手はとても嫌がります。',
+              },
+              {
+                type: 'move', shape: BIG, coords: true,
+                state: { board: { '59': 'K', '21': 'k', '63': 'g', '43': 'g' }, hands: { b: { S: 1 }, w: {} }, turn: 'b' },
+                goal: (r) => r.drop === 'S' && r.to === '52',
+                prompt: '<strong>割り打ちの銀</strong>です。2枚の金を同時に狙え、しかも金に取られない場所に、持ち駒の銀を打ってください。',
+                hint: '銀は斜め後ろにも利きます。5四に打つと金に取られます。金の「行けない方向」はどこでしょう。',
+                why: '5二の銀が、斜め後ろの6三と4三の金を同時に狙います。金は斜め後ろに下がれないので、この銀を取れません。',
               },
             ],
           },
@@ -7191,9 +7857,9 @@ const NS_DSHOGI = (() => {
               },
               {
                 type: 'move', shape: BIG, goal: 'mate',
-                state: { board: { '12': 'k', '13': 'G', '22': 'S', '99': 'K' }, hands: { b: { G: 1 }, w: {} }, turn: 'b' },
+                state: { board: { '12': 'k', '14': 'S', '23': 'P', '99': 'K' }, hands: { b: { G: 1 }, w: {} }, turn: 'b' },
                 prompt: '1手で詰ませてください。持ち駒の金が使えます。',
-                hint: '先に玉の逃げ道を数えます。1一・2一・2三のうち、どこが空いていますか。',
+                hint: '先に玉の逃げ道を数えます。1四の銀と2三の歩が、どのマスを押さえているかを見てから打ちます。',
                 why: '逃げ道を数えてから打つ。詰将棋はこの順番でやると速くなります。',
               },
             ],
@@ -7350,7 +8016,7 @@ const NS_DSHOGI = (() => {
               },
               {
                 type: 'mateIn', moves: 3, shape: BIG, coords: true,
-                state: { board: { '13': 'k', '24': 'S', '99': 'K' }, hands: { b: { G: 1, R: 1 }, w: {} }, turn: 'b' },
+                state: { board: { '13': 'k', '32': 'S', '99': 'K' }, hands: { b: { G: 1, R: 1 }, w: {} }, turn: 'b' },
                 prompt: 'もう1問。持ち駒の飛と金で3手詰めです。',
                 hint: '飛車は縦横に走ります。まず逃げ道をふさぐ王手から入ります。',
                 why: '大駒で追い、持ち駒で仕留める。終盤でいちばん多く出てくる形です。',
@@ -7406,7 +8072,7 @@ const NS_DSHOGI = (() => {
               },
               {
                 type: 'danger', shape: BIG, coords: true,
-                state: { board: { '59': 'K', '22': 'k', '32': 'g', '23': 'g', '16': 'P', '19': 'L', '13': 'p', '28': 'R' }, hands: { b: {}, w: {} }, turn: 'b' },
+                state: { board: { '59': 'K', '22': 'k', '32': 'g', '23': 'g', '16': 'P', '19': 'L', '13': 'p', '28': 'R', '64': 'b' }, hands: { b: {}, w: {} }, turn: 'b' },
                 prompt: 'まず現状把握です。取られてしまう自分の駒を全部タップしてください。',
                 why: '攻める前に、自分の駒が無事かを確かめる。順番はいつもこれです。',
               },
@@ -7456,6 +8122,20 @@ const NS_DSHOGI = (() => {
                   これだけで詰まなくなることがよくあります。</p>
                   <p>初心者は玉を動かすのをもったいなく感じますが、逆です。
                   玉が安全なら、多少駒を損しても負けません。<strong>玉が詰まなければ負けない</strong>のが将棋です。</p>`,
+              },
+              {
+                type: 'move', shape: BIG, coords: true,
+                state: { board: { '28': 'K', '38': 'G', '18': 'P', '27': 'P', '51': 'k', '88': 'r' }, hands: { b: { P: 1 }, w: {} }, turn: 'b' },
+                goal: (r) => r.drop === 'P' && r.to === '39',
+                prompt: '<strong>底歩</strong>を打ってください。3八の金を、真下から支える場所です。',
+                hint: '「金底の歩、岩より堅し」。金のすぐ下（9段目）に打ちます。',
+                why: '3九の歩が3八の金を支えます。これだけで、横からの飛車の攻めに対する強さが変わります。',
+              },
+              {
+                type: 'danger', shape: BIG, coords: true,
+                state: { board: { '59': 'K', '51': 'k', '77': 'S', '65': 'b', '28': 'R', '25': 'p', '87': 'P' }, hands: { b: {}, w: {} }, turn: 'b' },
+                prompt: '受ける前に、まず何が狙われているか確かめます。取られてしまう駒を全部タップしてください。',
+                why: '「取る・逃げる・合駒・守りを足す」を選ぶ前に、何が危ないかを正確に知る。順番はいつもこれです。',
               },
             ],
           },
@@ -7735,6 +8415,18 @@ const NS_DMAHJONG = (() => {
                 answer: 0,
                 why: '4枚使いは2組と数えません。7種類すべて違う牌でそろえる必要があります。',
               },
+              {
+                type: 'agari', sets: 4,
+                tiles: ['m1', 'm1', 'm4', 'm4', 'p2', 'p2', 'p8', 'p8', 's5', 's5', 's9', 's9', 'z3', 'z3'],
+                prompt: 'この手は<strong>アガリの形</strong>になっているでしょうか。（4面子1雀頭でなくても、七対子ならアガリです）',
+              },
+              {
+                type: 'yaku',
+                tiles: ['m1', 'm1', 'm4', 'm4', 'p2', 'p2', 'p8', 'p8', 's5', 's5', 's9', 's9', 'z3', 'z3'],
+                options: ['chiitoi', 'tanyao', 'yakuhai', 'tsumo'],
+                ctx: { tsumo: true, menzen: true },
+                prompt: 'この手であがったとき、ついている役を全部選んでください。',
+              },
             ],
           },
         ],
@@ -7823,6 +8515,17 @@ const NS_DMAHJONG = (() => {
                 ],
                 answer: 0,
                 why: 'これを「役なし」といいます。だから多くの人はとりあえずリーチをかけます。リーチ自体が役になるからです。',
+              },
+              {
+                type: 'yaku',
+                tiles: ['m1', 'm2', 'm3', 'p7', 'p8', 'p9', 's1', 's2', 's3', 'm7', 'm8', 'm9', 'p5', 'p5'],
+                options: ['tanyao', 'yakuhai', 'pinfu', 'chiitoi'],
+                ctx: { tsumo: false, menzen: true, winTile: 'p5' },
+                prompt: 'この手は形がそろっています。ついている役を選んでください。（ないかもしれません）',
+              },
+              {
+                type: 'waits', sets: 4,
+                prompt: 'テンパイの練習です。アガリ牌を全部選んでください。役がなくても、リーチをかければあがれます。',
               },
             ],
           },
@@ -7992,7 +8695,7 @@ const NS_DMAHJONG = (() => {
               {
                 type: 'teach', title: 'ベタオリという選択',
                 body: `<p>もうひとつ、覚えておくと生き延びられる考え方です。</p>
-                  <p>誰かがリーチをかけて、自分の手がまだ遠い（あと3枚以上必要）とき。
+                  <p>誰かがリーチをかけて、自分の手がまだ遠い（テンパイまであと2枚以上）とき。
                   <strong>あがるのを諦めて、当たらない牌だけを切る</strong>という選択があります。これを<u>ベタオリ</u>といいます。</p>
                   <p>安全な牌の見分け方でいちばん確実なのは、<strong>リーチした人が自分で捨てている牌</strong>です。
                   自分の捨てた牌ではあがれないというルール（フリテン）があるので、100%当たりません。</p>
@@ -8009,6 +8712,9 @@ const NS_DMAHJONG = (() => {
                 answer: 0,
                 why: '自分の捨てた牌ではロンできない（フリテン）ため、100%安全です。迷ったらここから探します。',
               },
+              { type: 'discard', sets: 4,
+                prompt: '速さを取る打ち方を試します。1枚切ってください。受け入れがいちばん広くなる牌はどれでしょう。' },
+              { type: 'discard', sets: 4 },
             ],
           },
           {
@@ -8139,7 +8845,7 @@ const NS_DMAHJONG = (() => {
                   つまり<u>4回に3回は、あがれません</u>。</p>
                   <p>だから上手い人ほど「あがる技術」と同じくらい<strong>「失点しない技術」</strong>を使います。
                   手が遠いのに押して振り込むのが、いちばん大きな損です。</p>
-                  <p>判断は単純にしていいです。<strong>誰かがリーチをかけて、自分の手があと3枚以上必要なら降りる。</strong>
+                  <p>判断は単純にしていいです。<strong>誰かがリーチをかけて、自分の手がテンパイまであと2枚以上なら降りる。</strong>
                   相手の捨て牌と同じ牌を切っていく。それだけで負け方が変わります。</p>`,
               },
               {
@@ -8208,6 +8914,9 @@ const NS_DMAHJONG = (() => {
                 answer: 0,
                 why: 'だから「あがれない3回」をどう安く済ませるかが、勝敗を分けます。',
               },
+              { type: 'tileid' },
+              { type: 'discard', sets: 4,
+                prompt: '卓につく前に、切る判断の確認です。1枚切ってください。' },
             ],
           },
           {
@@ -8219,7 +8928,7 @@ const NS_DMAHJONG = (() => {
                 body: `<p>誰かがリーチをかけました。あなたはどうするか。
                   これが麻雀でいちばん多く、いちばん大きな差がつく判断です。</p>
                   <p>上級者はいろいろ考えますが、入門で覚えるのは<strong>1つの条件だけ</strong>で足ります。</p>
-                  <p><strong>自分の手があと2枚以上必要なら、降りる。</strong><br>
+                  <p><strong>自分の手がテンパイまであと2枚以上なら、降りる。</strong><br>
                   <strong>テンパイなら、押す。</strong></p>
                   <p>理由は単純です。手が遠いということは、あがれる見込みが薄いということ。
                   見込みの薄い手のために危険牌を切るのは、<u>あがれないうえに振り込む</u>いちばん損な打ち方です。</p>`,
@@ -8233,8 +8942,8 @@ const NS_DMAHJONG = (() => {
                   自分が捨てた牌ではロンできない。だからリーチした人の捨て牌は、その人には絶対に当たりません。</p>
                   <p>危ない順はこうです。<br>
                   <strong>現物（安全）＜ 字牌 ＜ 1と9 ＜ 2と8 ＜ 3〜7（危険）</strong></p>
-                  <p>この対局では、牌の下に色の帯が出ます。緑が現物、赤が危険です。
-                  自分で判断できるようになったら、設定で消してください。</p>`,
+                  <p>このあとの4人打ちの対局では、リーチが入ると牌の下に色の帯が出ます。緑が現物、赤が危険です。
+                  自分で判断できるようになったら、卓の下の「危険度を牌に表示」のチェックを外してください。</p>`,
               },
               {
                 type: 'quiz', prompt: 'リーチした人に、絶対に当たらない牌はどれでしょう。',
@@ -8256,6 +8965,9 @@ const NS_DMAHJONG = (() => {
                 answer: 0,
                 why: '「リーチが来たら降りる」は、手が遠いときの話です。テンパイしているなら堂々と押します。',
               },
+              { type: 'safetile',
+                prompt: '実際にやってみましょう。南家がリーチしています。<strong>いちばん安全な牌</strong>を選んでください。' },
+              { type: 'safetile' },
             ],
           },
           {
@@ -8304,7 +9016,7 @@ const NS_DMAHJONG = (() => {
                 body: `<p>鳴きが得になるのは、<strong>鳴いても役が残るとき</strong>だけです。
                   入門段階では次の2つに絞ってください。</p>
                   <p><strong>1. 役牌（白・發・中・自風・場風）が2枚あって、3枚目が出たとき。</strong><br>
-                  ポンした瞬間に役が確定します。これはほぼ always 鳴いていい。</p>
+                  ポンした瞬間に役が確定します。これはほぼ必ず鳴いていい場面です。</p>
                   <p><strong>2. タンヤオが確実なとき。</strong><br>
                   手の中に1・9・字牌が1枚もなく、鳴いてもタンヤオが崩れないとき。</p>
                   <p>この2つ以外で鳴くと、<u>役なしで手が進んで、あがれないままテンパイする</u>という
@@ -8442,21 +9154,21 @@ const NS_DMAHJONG = (() => {
                   適当に安全牌を切っていると、途中で切る牌がなくなって結局押すはめになります。</p>
                   <p><strong>1. 安全牌が何枚あるか数える。</strong>
                   現物が3枚あるなら、3巡しのげます。残りの巡目と比べてください。</p>
-                  <p><strong>2. 安全度の低いものから切る。</strong>
-                  ここが逆になりがちです。いちばん安全な牌は<u>最後に取っておく</u>。
-                  終盤になるほど相手の待ちは絞られ、危険度が上がるからです。</p>
+                  <p><strong>2. いまいちばん安全な牌から切る。</strong>
+                  降りると決めたら、その巡目に振り込まないことが最優先です。現物があれば現物から。
+                  安全牌が足りなくなりそうなら、手の中の牌で「次に安全になりそうなもの」（スジや、見えている字牌）を見ておきます。</p>
                   <p><strong>3. 手牌を壊すのをためらわない。</strong>
                   降りると決めたら、アガリは諦めます。両面を崩してでも安全牌を作ります。</p>`,
               },
               {
-                type: 'quiz', prompt: '降りるとき、現物が3枚あります。どの順に切りますか。',
+                type: 'quiz', prompt: '降りると決めました。現物が3枚あります。まず何を切りますか。',
                 choices: [
-                  { t: '安全度の低いものから切り、現物は後に残す' },
-                  { t: '現物から先に切る', why: '終盤ほど危険度が上がるので、確実な牌を後に残します。' },
+                  { t: '現物を切る' },
+                  { t: '危険な牌を先に切り、現物は後に残す', why: 'いま危険な牌を切れば、その場で振り込むかもしれません。降りるなら、いま安全な牌を切ります。' },
                   { t: '手が進む牌から切る', why: '降りると決めたなら、手を進める必要はありません。' },
                 ],
                 answer: 0,
-                why: '安全牌は「巡目の貯金」です。終盤ほど価値が上がるので、後に取っておきます。',
+                why: '降りの基本は「その巡目にいちばん安全な牌を切る」。現物が3枚あれば3巡しのげます。尽きたらスジや字牌で少しでも安全なものを選びます。',
               },
               {
                 type: 'quiz', prompt: '降りたいのに安全牌が1枚もありません。どうしますか。',
@@ -8641,6 +9353,32 @@ const NS_APP = await (async () => {
     const nextId = lessons.find((l) => !store.isDone(l.id))?.id;
     let n = 0;
 
+    // 復習：間違えたままの問題があるレッスン
+    const pend = store.pendingReviews(`${g.id}.`);
+    if (pend.length) {
+      const byLesson = new Map();
+      for (const r of pend) {
+        const l = lessons.find((x) => x.id === r.lessonId);
+        if (!l || !l.steps[r.step] || l.steps[r.step].type === 'teach') continue;
+        if (!byLesson.has(l.id)) byLesson.set(l.id, { l, steps: [] });
+        byLesson.get(l.id).steps.push(r.step);
+      }
+      if (byLesson.size) {
+        root.appendChild(el('h2', 'chapter', '復習'));
+        const list = el('div', 'llist');
+        for (const { l, steps } of byLesson.values()) {
+          const row = el('button', 'lrow');
+          row.innerHTML = `
+            <span class="lrow__no">↺</span>
+            <span><span class="lrow__t">${l.title}</span><br><span class="lrow__d">間違えた問題をもう一度</span></span>
+            <span class="lrow__s">${steps.length}問</span>`;
+          row.addEventListener('click', () => (location.hash = `#/${g.id}/${l.id}/review`));
+          list.appendChild(row);
+        }
+        root.appendChild(list);
+      }
+    }
+
     for (const ch of g.chapters) {
       root.appendChild(el('h2', 'chapter', ch.title));
       const list = el('div', 'llist');
@@ -8662,7 +9400,7 @@ const NS_APP = await (async () => {
     return root;
   }
 
-  function viewLesson(gameId, lessonId) {
+  function viewLesson(gameId, lessonId, mode = '') {
     const g = GAMES[gameId];
     const lessons = flat(g);
     const idx = lessons.findIndex((l) => l.id === lessonId);
@@ -8676,15 +9414,20 @@ const NS_APP = await (async () => {
     const host = el('div');
     root.appendChild(host);
 
+    const only = mode === 'review'
+      ? store.pendingReviews(`${lesson.id}#`).map((r) => r.step)
+        .filter((n) => lesson.steps[n] && lesson.steps[n].type !== 'teach').sort((a, b) => a - b)
+      : null;
     new LessonRunner(lesson, host, {
-      onFinish: ({ correct, total }) => {
-        const next = lessons[idx + 1];
+      only,
+      onFinish: ({ correct, total, review }) => {
+        const next = review ? null : lessons[idx + 1];
         const stage = el('div', 'stage');
         stage.style.setProperty('--tone', `var(--${g.id})`);
         stage.innerHTML = `
-          <h2>${lesson.title} 修了</h2>
+          <h2>${lesson.title} ${review ? '復習おわり' : '修了'}</h2>
           <p>${total ? `${total}問中 ${correct}問を一発で正解しました。` : 'お疲れさまでした。'}
-          ${correct < total ? '間違えたところは、あとでもう一度出てきます。' : ''}</p>`;
+          ${correct < total ? `間違えた問題は、${g.name}の一覧の「復習」から解き直せます。` : ''}</p>`;
         const acts = el('div', 'actions');
         if (next) {
           const b = el('button', 'btn btn--tone', `つぎへ：${next.title}`);
@@ -8740,8 +9483,8 @@ const NS_APP = await (async () => {
     }
     if (status === 'off') {
       card.appendChild(el('p', null,
-        `自動同期を使うには <code>js/core/firebase-config.js</code> に Firebase の設定を書きます。
-         手順は README.md にあります。設定しなくても、下の引き継ぎコードで端末間の移動はできます。`));
+        `自動同期を使うには、このHTMLファイルの中の <code>firebaseConfig</code>（「firebase-config.js」の区切りの下）に
+         Firebase の設定を書き込みます。設定しなくても、下の引き継ぎコードで端末間の移動はできます。`));
     }
 
     const copy = el('button', 'btn btn--ghost', '引き継ぎコードをコピー');
@@ -8825,14 +9568,12 @@ const NS_APP = await (async () => {
 
   // ── ルーティング ───────────────────────────────────────
   function render() {
-    const [, gameId, lessonId] = location.hash.replace(/^#\/?/, '').split('/').length
-      ? ['', ...location.hash.replace(/^#\//, '').split('/')]
-      : ['', '', ''];
+    const [gameId = '', lessonId = '', mode = ''] = location.hash.replace(/^#\/?/, '').split('/');
     const main = $('#main');
     main.innerHTML = '';
 
     let view;
-    if (gameId && GAMES[gameId] && lessonId) view = viewLesson(gameId, lessonId);
+    if (gameId && GAMES[gameId] && lessonId) view = viewLesson(gameId, lessonId, mode);
     else if (gameId && GAMES[gameId]) view = viewGame(gameId);
     else view = viewHub();
 
@@ -8860,9 +9601,7 @@ const NS_APP = await (async () => {
   await store.init();
   render();
 
-  if ('serviceWorker' in navigator && location.protocol === 'https:') {
-    navigator.serviceWorker.register('./sw.js').catch(() => {});
-  }
+  // 1ファイル版なので Service Worker（sw.js）は登録しない。存在しないファイルを毎回取りに行くのを避ける
 
   return {};
 })();
