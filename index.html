@@ -1386,6 +1386,19 @@ const NS_MAHJONG = (() => {
     yakuhai: { ja: '役牌', han: 1, desc: '白・發・中や自分の風の刻子。' },
     pinfu: { ja: 'ピンフ', han: 1, desc: '順子だけ＋役牌でない雀頭＋両面待ち。' },
     chiitoi: { ja: '七対子', han: 2, desc: '同じ牌2枚を7組。' },
+    iipeiko: { ja: '一盃口', han: 1, desc: 'まったく同じ順子が2組。門前限定。' },
+    ittsu: { ja: '一気通貫', han: 2, naki: 1, desc: '同じ色で123・456・789がそろう。鳴くと1翻。' },
+    sanshoku: { ja: '三色同順', han: 2, naki: 1, desc: '萬子・筒子・索子で同じ数の順子。鳴くと1翻。' },
+    toitoi: { ja: '対々和', han: 2, desc: '4つの組が全部刻子（同じ牌3枚）。' },
+    honitsu: { ja: '混一色', han: 3, naki: 2, desc: '1種類の数牌と字牌だけ。鳴くと2翻。' },
+    chinitsu: { ja: '清一色', han: 6, naki: 5, desc: '1種類の数牌だけ。鳴くと5翻。' },
+  };
+
+  /** 役の翻数（鳴いていると下がる役がある） */
+  const yakuHan = (k, menzen) => {
+    const y = YAKU_JA[k];
+    if (!y) return 0;
+    return menzen ? y.han : (y.naki ?? y.han);
   };
 
   /**
@@ -1420,6 +1433,23 @@ const NS_MAHJONG = (() => {
         }));
       if (pinfuOk) out.push('pinfu');
     }
+
+    // ── 手役（組の分け方で決まるもの）。鳴いた組も1つの組として数える
+    const meldSets = melds.map((m) => sortTiles(m).slice(0, 3));
+    const isSeq = (s) => s[0] !== s[1];
+    const decs = decompose(tiles, sets).map((d) => [...d.sets, ...meldSets]);
+    if (decs.some((ss) => ['m', 'p', 's'].some((c) =>
+      [1, 4, 7].every((n) => ss.some((s) => isSeq(s) && s[0] === `${c}${n}`))))) out.push('ittsu');
+    if (decs.some((ss) => [1, 2, 3, 4, 5, 6, 7].some((n) =>
+      ['m', 'p', 's'].every((c) => ss.some((s) => isSeq(s) && s[0] === `${c}${n}`))))) out.push('sanshoku');
+    if (decs.some((ss) => ss.length === 4 && ss.every((s) => !isSeq(s)))) out.push('toitoi');
+    if (menzen && decompose(tiles, sets).some((d) => {
+      const seqs = d.sets.filter(isSeq).map((s) => s.join(''));
+      return seqs.some((x, i) => seqs.indexOf(x) !== i);
+    }) && !(sets === 4 && isChiitoi(tiles) && !decompose(tiles, sets).length)) out.push('iipeiko');
+    // 染め手（牌の種類だけで決まる）
+    const suits = new Set(all.filter((t) => !isHonor(t)).map((t) => t[0]));
+    if (suits.size === 1) out.push(all.some(isHonor) ? 'honitsu' : 'chinitsu');
     return [...new Set(out)];
   }
 
@@ -1503,7 +1533,7 @@ const NS_MAHJONG = (() => {
     return null;
   }
 
-  return { SUITS, SUIT_JA, SUIT_YOMI, HONOR_JA, HONOR_YOMI, NUM_YOMI, ALL_TILES, toIndex, fromIndex, isHonor, isTerminal, isYaochu, tileName, tileYomi, toCounts, fromCounts, sortTiles, makeWall, decompose, isAgari, isChiitoi, isKokushi, isWin, waits, isTenpai, WAIT_TYPES, waitType, shanten, YAKU_JA, judgeYaku, countYakuhai, randomWinHand, randomTenpai };
+  return { SUITS, SUIT_JA, SUIT_YOMI, HONOR_JA, HONOR_YOMI, NUM_YOMI, ALL_TILES, toIndex, fromIndex, isHonor, isTerminal, isYaochu, tileName, tileYomi, toCounts, fromCounts, sortTiles, makeWall, decompose, isAgari, isChiitoi, isKokushi, isWin, waits, isTenpai, WAIT_TYPES, waitType, shanten, YAKU_JA, yakuHan, judgeYaku, countYakuhai, randomWinHand, randomTenpai };
 })();
 
 // ── js/games/mahjong4.js ────────────────────────────────────
@@ -1795,7 +1825,7 @@ const NS_MJ4 = (() => {
       };
       const list = M.judgeYaku(hand, yctx);
       // 役牌は刻子の数だけ（連風牌は2翻）。それ以外は表の翻数
-      let han = list.reduce((a, k) => a + (k === 'yakuhai' ? M.countYakuhai(hand, yctx) : (M.YAKU_JA[k]?.han || 0)), 0);
+      let han = list.reduce((a, k) => a + (k === 'yakuhai' ? M.countYakuhai(hand, yctx) : M.yakuHan(k, menzen)), 0);
       const extras = [];
       if (this.ippatsu[p] && this.riichi[p]) { han += 1; extras.push('一発'); }
       // hand は手の中の牌＋あがり牌。ロンのあがり牌も tsumo のツモ牌も hands[p] には入っていない
@@ -3499,6 +3529,7 @@ const NS_STORE = (() => {
           correct: Math.max(prev.correct || 0, correct),
           total,
           at: Date.now(),
+          day: today(),
         };
         this._touchStreak(s);
       });
@@ -3589,8 +3620,31 @@ const NS_MJAI = (() => {
    * 危険度をざっくり出す。0 = 安全、大きいほど危ない。
    * 入門で扱うのは「現物」「字牌の見えた枚数」くらいまでに留める。
    */
+  /**
+   * スジ：リーチした人が n±3 を捨てていれば、n は両面待ちでは当たらない。
+   * 1〜3 と 7〜9 は片側だけ見ればよい。4〜6 は両側そろって「両スジ」、片側だけなら「片スジ」。
+   * 戻り値: 'full'（スジ）/ 'half'（片スジ）/ null
+   */
+  function sujiOf(tile, safe) {
+    if (M.isHonor(tile)) return null;
+    const c = tile[0], n = Number(tile[1]);
+    const lo = n - 3 >= 1 ? safe.has(`${c}${n - 3}`) : null;
+    const hi = n + 3 <= 9 ? safe.has(`${c}${n + 3}`) : null;
+    if (lo === null) return hi ? 'full' : null;
+    if (hi === null) return lo ? 'full' : null;
+    return lo && hi ? 'full' : lo || hi ? 'half' : null;
+  }
+
   function danger(game, tile, target) {
-    if (genbutsu(game, target).has(tile)) return 0;
+    const safe = genbutsu(game, target);
+    if (safe.has(tile)) return 0;
+    const suji = sujiOf(tile, safe);
+    if (suji === 'full') {
+      const n = Number(tile[1]);
+      // スジでも単騎・双ポン・嵌張には当たる。端ほど安全
+      return n === 1 || n === 9 ? 3 : n === 2 || n === 8 ? 4 : 5;
+    }
+    if (suji === 'half') return 9;
     const visible = [
       ...game.discards.flatMap((d) => d.map((x) => x.tile)),
       ...game.melds.flatMap((m) => m.flatMap((x) => x.tiles)),
@@ -3750,10 +3804,11 @@ const NS_MJAI = (() => {
       } else if (d >= 9) {
         level = 'miss';
         const n = Number(tile[1]);
+        const half = threats.some((q) => sujiOf(tile, genbutsu(game, q)) === 'half');
         lines.push({
           kind: 'push',
           what: `${M.tileName(tile)}は危険度の高い牌です。`,
-          why: (n === 2 || n === 8
+          why: half ? '片スジ（片側だけスジが通っている）なので、もう片側の両面には当たります。テンパイなら押していい場面ですが、承知のうえで。' : (n === 2 || n === 8
             ? '2と8は、3〜7の次に当たりやすい牌です。'
             : '3〜7の牌は、両面待ちの両側になりやすく、いちばん当たりやすい牌です。')
             + 'テンパイなら押していい場面ですが、承知のうえで。',
@@ -3764,7 +3819,7 @@ const NS_MJAI = (() => {
     return { level, lines };
   }
 
-  return { genbutsu, danger, riichiPlayers, shouldFold, safestDiscard, cpuTurn, cpuCall, foldAdvice, reviewDiscard4 };
+  return { genbutsu, sujiOf, danger, riichiPlayers, shouldFold, safestDiscard, cpuTurn, cpuCall, foldAdvice, reviewDiscard4 };
 })();
 
 // ── js/core/play.js ─────────────────────────────────────────
@@ -4859,8 +4914,9 @@ const NS_LESSON = (() => {
      * opts.only に問題番号の配列を渡すと、その問題だけを解き直す「復習」になる。
      * 復習では修了の記録は付けず、一発で解けた問題の復習だけを消す。
      */
-    constructor(lesson, host, { onFinish, onExit, only = null } = {}) {
+    constructor(lesson, host, { onFinish, onExit, only = null, transient = false } = {}) {
       this.lesson = lesson;
+      this.transient = transient;   // 実力テストなど：ミスも修了も記録しない
       this.host = host;
       this.onFinish = onFinish;
       this.onExit = onExit;
@@ -4925,7 +4981,9 @@ const NS_LESSON = (() => {
           // 解き終わったあとの操作はミスに数えない
           if (!self.missedThisStep && !self.solvedThisStep) {
             self.missedThisStep = true;
-            if (self.step.type !== 'teach') store.recordMiss(self.lesson.id, String(self.i));
+            if (self.step.type !== 'teach' && !self.transient && !self.lesson.id.endsWith('._daily')) {
+              store.recordMiss(self.lesson.id, String(self.i));
+            }
           }
         },
         solved(msg) { self._solved(msg); },
@@ -4960,10 +5018,12 @@ const NS_LESSON = (() => {
         if (!this.missedThisStep) {
           this.correct++;
           // 一発で解けたら復習リストから外す。間違えたら残して、あとで解き直せるようにする
-          store.clearReview(this.lesson.id, String(this.i));
+          if (!this.transient) store.clearReview(this.lesson.id, String(this.i));
         }
         sfx.correct();
       }
+      // 今日の1問・実力テストでは、どのレッスンの問題だったかを最後に見せる
+      if (this.step.fromLesson) msg = `${msg || '<b>正解</b>'}<br><span class="note">出題元：${this.step.fromLesson}</span>`;
       if (msg) this.ctx().say(msg, 'ok');
       const last = this.pos === this.order.length - 1;
       this._actions([{
@@ -4976,7 +5036,7 @@ const NS_LESSON = (() => {
     _finish() {
       const total = this.order.filter((n) => this.lesson.steps[n].type !== 'teach').length;
       sfx.finish();
-      if (!this.review) store.recordLesson(this.lesson.id, { correct: this.correct, total });
+      if (!this.review && !this.transient) store.recordLesson(this.lesson.id, { correct: this.correct, total });
       this.onFinish?.({ correct: this.correct, total, review: this.review });
     }
 
@@ -5670,8 +5730,8 @@ const NS_LESSON = (() => {
         ctx.say('<b>ステイルメイトです</b>相手は動ける手がないのに、チェックされていません。これでは引き分けです。'
           + `${s.hint ? `<br>${s.hint}` : ''}`, 'ng');
       } else if (review.level === 'ok') {
-        // 危険ではないが、この問題で狙ってほしい手ではない
-        ctx.say(`<b>その手も悪くありません</b>ただ、ここで見つけてほしいのは別の手です。`
+        // 危険ではないが、この問題で狙ってほしい手ではない（s.wrong があればその説明を優先）
+        ctx.say(s.wrong ? `<b>${s.wrong}</b>` : `<b>その手も悪くありません</b>ただ、ここで見つけてほしいのは別の手です。`
           + `${s.hint ? `<br>${s.hint}` : ''}`, 'ng');
       } else {
         ctx.say(`<b>${review.level === 'blunder' ? 'それは危ない手です' : 'おしい'}</b>`
@@ -6039,7 +6099,9 @@ const NS_LESSON = (() => {
           } else {
             ctx.miss();
             ctx.say(`<b>${M.tileName(t)}は危険です</b>${
-              M.isHonor(t) ? `字牌ですが、見えているのは${discards.filter((x) => x === t).length}枚だけです。単騎や双ポンで待たれます。`
+              MJAI.sujiOf(t, new Set(discards)) === 'full' ? 'スジなので両面には当たりませんが、単騎・双ポン・嵌張には当たります。現物のほうが安全です。'
+              : MJAI.sujiOf(t, new Set(discards)) === 'half' ? '片スジです。もう片側の両面には当たります。'
+              : M.isHonor(t) ? `字牌ですが、見えているのは${discards.filter((x) => x === t).length}枚だけです。単騎や双ポンで待たれます。`
               : Number(t[1]) >= 3 && Number(t[1]) <= 7 ? '3〜7の牌は両面待ちの両側になりやすく、いちばん当たりやすい牌です。'
               : Number(t[1]) === 2 || Number(t[1]) === 8 ? '2と8は、3〜7の次に当たりやすい牌です。'
               : '1と9は端の牌で比較的安全ですが、現物ではありません。'}`, 'ng');
@@ -6196,6 +6258,93 @@ const NS_LESSON = (() => {
       { label: 'やり直す', variant: 'ghost', onClick: reset },
       { label: 'ヒント', variant: 'ghost', onClick: () => { ctx.miss(); ctx.say(s.hint || 'まず王手、次に守られていない駒を探します。'); } },
     ]);
+    reset();
+  };
+
+  // ── チェス：定跡の手順をなぞる。白は自分、黒は決まった手を自動で指す
+  //    s.line = ['e2e4', 'e7e5', ...]（白黒交互）、s.notes = { 手の番号: '説明' }
+  STEPS.line = (ctx) => {
+    const s = ctx.step;
+    ctx.prompt(s.prompt);
+    const { board } = boardSpec(ctx, s);
+    const info = el('p', 'note');
+    ctx.mount.appendChild(info);
+    const START = { w: { k: true, q: true }, b: { k: true, q: true } };
+    let position, opts, i, from, busy, token = 0;
+
+    const paint = (extra = {}) => board.setPosition(position, extra);
+    const say = () => {
+      const n = Math.floor(i / 2) + 1;
+      info.innerHTML = `${n}手目：あなた（白）の番です。${s.notes?.[i] ? `<br>${s.notes[i]}` : ''}`;
+    };
+    const play = (mv) => {
+      const f = mv.slice(0, 2), t = mv.slice(2, 4);
+      const next = C.nextRights(opts, position, f, t);
+      position = C.applyMove(position, f, t, opts);
+      opts = next;
+      return { [f]: 'last', [t]: 'last' };
+    };
+    const reset = () => {
+      token++;
+      position = { ...(s.board || C.START_POSITION) };
+      opts = { w: 8, h: 8, castle: { w: { ...START.w }, b: { ...START.b } }, ep: null };
+      i = 0; from = null; busy = false;
+      ctx.clear(); paint(); say();
+    };
+    const blackReply = () => {
+      busy = true;
+      const my = token;
+      setTimeout(() => {
+        if (my !== token) return;
+        const mark = play(s.line[i]);
+        i++;
+        sfx.place('chess');
+        paint(mark);
+        busy = false;
+        if (i >= s.line.length) {
+          ctx.solved(`<b>定跡どおりです</b>${s.why || ''}`);
+          return;
+        }
+        say();
+      }, 450);
+    };
+
+    board.onPick = (sq) => {
+      if (busy || i >= s.line.length) return;
+      const mine = (x) => position[x] && C.colorOf(position[x]) === 'w';
+      if (from === null) {
+        if (!mine(sq)) return;
+        from = sq;
+        const m = { [sq]: 'sel' };
+        for (const t of C.legalMoves(position, sq, opts)) m[t] = 'move';
+        paint(m);
+        return;
+      }
+      if (sq === from) { from = null; paint(); return; }
+      if (!C.legalMoves(position, from, opts).includes(sq)) {
+        if (mine(sq)) { from = null; board.onPick(sq); }
+        return;
+      }
+      const want = s.line[i];
+      if (from + sq !== want) {
+        ctx.miss();
+        const w = want.slice(0, 2);
+        ctx.say(`<b>この定跡では別の手です</b>${C.PIECE_JA[C.kindOf(position[w])]}を動かします。`, 'ng');
+        from = null;
+        paint({ [w]: 'hint' });
+        return;
+      }
+      from = null;
+      ctx.clear();
+      const mark = play(want);
+      i++;
+      sfx.place('chess');
+      paint(mark);
+      if (i >= s.line.length) { ctx.solved(`<b>定跡どおりです</b>${s.why || ''}`); return; }
+      blackReply();
+    };
+
+    ctx.actions([{ label: '最初から', variant: 'ghost', onClick: reset }]);
     reset();
   };
 
@@ -7836,6 +7985,112 @@ const NS_DCHESS = (() => {
           },
         ],
       },
+      {
+        title: '九　序盤と終盤の基本',
+        lessons: [
+          {
+            id: 'chess.openings', game: 'chess', title: 'よく使われる序盤',
+            desc: 'イタリアン・スペイン・クイーンズギャンビット・ロンドン',
+            steps: [
+              {
+                type: 'teach', title: '定跡は「理由つき」で覚える',
+                body: `<p>定跡は、たくさんの人が指して確かめてきた序盤の手順です。丸暗記より、
+                  <strong>中央を取る・駒を出す・キャスリングする</strong>の3つが、どの手に当たるかを考えながら指すと身につきます。</p>
+                  <p>ここでは白を持って、代表的な4つの序盤をなぞります。黒は決まった手で応じます。</p>`,
+              },
+              {
+                type: 'line', prompt: '<strong>イタリアン</strong>：e4 のあと、ナイトとビショップを出してキャスリングまで。',
+                line: ['e2e4', 'e7e5', 'g1f3', 'b8c6', 'f1c4', 'f8c5', 'e1g1'],
+                notes: { 0: 'まず中央のポーンを2マス（e4）。', 2: 'ナイトを f3 へ。e5のポーンを狙いながら、キャスリングの準備。', 4: 'ビショップを c4 へ。黒の弱いマス f7 をにらみます。', 6: 'キャスリング（キングを g1 へ2マス）。' },
+                why: 'e4・Nf3・Bc4・O-O。中央、展開、キャスリングが4手でそろいました。',
+              },
+              {
+                type: 'line', prompt: '<strong>スペイン（ルイ・ロペス）</strong>：ビショップで c6 のナイトに圧力をかけます。',
+                line: ['e2e4', 'e7e5', 'g1f3', 'b8c6', 'f1b5', 'a7a6', 'b5a4', 'g8f6', 'e1g1'],
+                notes: { 4: 'ビショップを b5 へ。e5を守っているナイトに圧力をかけます。', 6: 'a6 で追われたら、a4 へ下がってにらみを保ちます。', 8: 'キャスリング。' },
+                why: 'Bb5 は「守っている駒に圧力をかける」手。何百年も指されている定跡です。',
+              },
+              {
+                type: 'line', prompt: '<strong>クイーンズギャンビット</strong>：d4 から始め、c4 で中央を争います。',
+                line: ['d2d4', 'd7d5', 'c2c4', 'e7e6', 'b1c3', 'g8f6', 'c1g5'],
+                notes: { 0: 'd4 から始めます。', 2: 'c4。ポーンを差し出す形ですが、取られても取り返せます。', 4: 'ナイトを c3 へ。d5 に圧力。', 6: 'ビショップを g5 へ。f6のナイトをピンします。' },
+                why: 'd4・c4 で中央を争い、ナイトとビショップを出しました。',
+              },
+              {
+                type: 'line', prompt: '<strong>ロンドン</strong>：毎回ほぼ同じ形に組める、覚えやすい序盤です。',
+                line: ['d2d4', 'd7d5', 'c1f4', 'g8f6', 'e2e3', 'e7e6', 'g1f3', 'c7c5', 'c2c3'],
+                notes: { 2: 'ビショップを先に f4 へ出します（e3 を突く前に）。', 4: 'e3 でビショップの通り道を確保。', 6: 'ナイトを f3 へ。', 8: 'c3 で d4 を支えます。' },
+                why: 'd4・Bf4・e3・Nf3・c3。相手が何をしてきても、ほぼこの形に組めるのがロンドンの強みです。',
+              },
+            ],
+          },
+          {
+            id: 'chess.endgame-kp', game: 'chess', title: 'キングとポーンの終盤',
+            desc: 'オポジションとキーマス',
+            steps: [
+              {
+                type: 'teach', title: 'キングが前、ポーンは後ろ',
+                body: `<p>キングとポーン1枚で相手キングに勝つには、<strong>自分のキングをポーンより前に出す</strong>のが基本です。
+                  ポーンを先に進めると、相手キングに前をふさがれて引き分けになりやすいのです。</p>
+                  <p>キング同士が1マスあけて向かい合った形を<strong>オポジション</strong>といいます。
+                  この形で<strong>相手の手番</strong>にできれば、相手キングは横へどくしかなく、こちらのキングが前へ進めます。</p>
+                  <p>そして、<strong>自分のキングがポーンの前の6段目</strong>まで行ければ（端のポーンを除いて）ほぼ勝ちです。</p>`,
+                board: { position: { c4: 'K', c3: 'P', c6: 'k' }, marks: { c4: 'sel', c6: 'ng', c5: 'hint' } },
+              },
+              {
+                type: 'bestmove', side: 'w', board: { b4: 'K', c3: 'P', c6: 'k' },
+                answers: [{ from: 'b4', to: 'c4' }],
+                prompt: '勝ちにつながる手は1つだけです。見つけてください。',
+                wrong: 'その手では、正しく守られると引き分けになります。',
+                hint: 'キング同士を1マスあけて向かい合わせ、相手に手番を渡します。',
+                why: 'Kc4 でオポジション。黒のキングはどいて前を空けるしかなく、白のキングが前へ進めます。ポーンを先に突くと引き分けになります。',
+              },
+              {
+                type: 'bestmove', side: 'w', board: { e4: 'K', f3: 'P', g5: 'k' },
+                answers: [{ from: 'e4', to: 'e5' }],
+                prompt: '勝ちにつながる手は1つだけです。見つけてください。',
+                wrong: 'その手では、正しく守られると引き分けになります。',
+                hint: 'ポーンを進めるより先に、キングを前へ。',
+                why: 'Ke5。キングがポーンより前に出て、相手キングの前進を止めながら道を作ります。',
+              },
+              {
+                type: 'bestmove', side: 'w', board: { e5: 'K', f4: 'P', g6: 'k' },
+                answers: [{ from: 'e5', to: 'e6' }],
+                prompt: '勝ちにつながる手は1つだけです。見つけてください。',
+                wrong: 'その手では、正しく守られると引き分けになります。',
+                hint: '6段目は、キングの目標地点です。',
+                why: 'Ke6。キングがポーンの前の6段目に入れば、あとはポーンを進めるだけで勝てます。',
+              },
+            ],
+          },
+          {
+            id: 'chess.endgame-rook', game: 'chess', title: 'ルークで詰ませる',
+            desc: 'キングとルークだけで仕留める',
+            steps: [
+              {
+                type: 'teach', title: 'ルークが壁、キングが押す',
+                body: `<p>キングとルークがあれば、相手のキングを必ず詰ませられます。</p>
+                  <p><strong>1.</strong> ルークで1本の線をふさぎ、相手キングを盤の端へ閉じ込める。<br>
+                  <strong>2.</strong> 自分のキングを近づけて、相手キングと向かい合わせる。<br>
+                  <strong>3.</strong> 向かい合った瞬間に、ルークで端の段から王手して詰み。</p>
+                  <p>ルークが相手キングに近づきすぎて取られないよう、<strong>ルークは離して使う</strong>のがコツです。</p>`,
+              },
+              {
+                type: 'mateIn', moves: 3, side: 'w', coords: true, board: { e5: 'K', d6: 'R', e8: 'k' },
+                prompt: '<strong>2手</strong>で詰ませてください（自分・相手・自分）。',
+                hint: 'ルークはもう7段目より下を閉じています。自分のキングを寄せましょう。',
+                why: 'Kf6 と寄ってから、相手キングの動きに合わせてルークで8段目から王手。キングとルークの基本の形です。',
+              },
+              {
+                type: 'mateIn', moves: 3, side: 'w', coords: true, board: { f6: 'K', e6: 'R', h8: 'k' },
+                prompt: '<strong>2手</strong>で詰ませてください。',
+                hint: '相手キングは隅にいます。自分のキングでもう1マス近づきます。',
+                why: 'Kg6 で相手キングの逃げ道を消し、次にルークを8段目に上げて詰み。',
+              },
+            ],
+          },
+        ],
+      },
     ],
   };
 
@@ -9179,6 +9434,139 @@ const NS_DSHOGI = (() => {
           },
         ],
       },
+      {
+        title: '十　手筋・詰めろ・囲いの崩し',
+        lessons: [
+          {
+            id: 'shogi.tesuji-fu', game: 'shogi', title: '歩の手筋ドリル',
+            desc: 'たたき・継ぎ歩・焦点・垂れ歩',
+            steps: [
+              {
+                type: 'teach', title: '歩1枚で形を崩す',
+                body: `<p><strong>たたきの歩</strong>：相手の駒の<strong>真正面</strong>に歩を打つ。取らせて駒を前へ誘い出す（または取らなければ、と金ができる）。<br>
+                  <strong>継ぎ歩</strong>：歩を交換したあと、相手の歩の前に<strong>もう一度</strong>歩を打つ。相手の歩をつり上げ、飛車の筋を通します。<br>
+                  <strong>焦点の歩</strong>：相手の駒が<strong>2枚以上利いているマス</strong>に歩を打つ。どちらで取っても、どこかに穴があきます。<br>
+                  <strong>垂れ歩</strong>：相手陣の1つ手前に打ち、次にと金を作る。</p>
+                  <p>歩はいちばん安い駒。<strong>歩で相手の形を崩せるなら、それは得な取引</strong>です。</p>`,
+              },
+              {
+                type: 'move', shape: BIG,
+                state: { board: { '59': 'K', '51': 'k', '42': 'g', '61': 's' }, hands: { b: { P: 1 }, w: {} }, turn: 'b' },
+                goal: (r) => r.drop === 'P' && r.to === '43',
+                prompt: '<strong>たたきの歩</strong>：4二の金の真正面に、歩を打ってください。',
+                hint: '金の正面は、下（4三）です。',
+                why: '4三歩。金で取れば金が玉から離れ、取らなければ次に4二歩成でと金ができます。',
+              },
+              {
+                type: 'move', shape: BIG,
+                state: { board: { '59': 'K', '51': 'k', '28': 'R', '24': 'p' }, hands: { b: { P: 1 }, w: {} }, turn: 'b' },
+                goal: (r) => r.drop === 'P' && r.to === '25',
+                prompt: '<strong>継ぎ歩</strong>：2筋で歩を交換したあと、相手の歩が2四まで出てきました。もう一度、その歩の前に歩を打ってください。',
+                hint: '相手の歩（2四）の正面、2五です。',
+                why: '2五歩。同歩と取らせれば歩がさらに前へつり上がり、飛車で相手陣に迫れます。',
+              },
+              {
+                type: 'move', shape: BIG,
+                state: { board: { '59': 'K', '51': 'k', '41': 'g', '21': 'g', '31': 's' }, hands: { b: { P: 1 }, w: {} }, turn: 'b' },
+                goal: (r) => r.drop === 'P' && r.to === '32',
+                prompt: '<strong>焦点の歩</strong>：相手の金2枚が利いているマスに歩を打ち、3一の銀を狙ってください。',
+                hint: '4一の金と2一の金、どちらも利いているマスがあります。',
+                why: '3二歩。どちらの金で取っても、もう片方との連結が切れて守りが薄くなります。取らなければ銀が取られます。',
+              },
+              {
+                type: 'move', shape: BIG,
+                state: { board: { '59': 'K', '51': 'k', '61': 'g', '41': 'g' }, hands: { b: { P: 1 }, w: {} }, turn: 'b' },
+                goal: (r) => r.drop === 'P' && r.to === '54',
+                prompt: '<strong>垂れ歩</strong>：相手陣の1つ手前に歩を打ってください。',
+                hint: '相手陣は1〜3段目。その1つ手前は4段目です。',
+                why: '5四歩。次に5三歩成とすれば、と金が玉のそばにできます。',
+              },
+            ],
+          },
+          {
+            id: 'shogi.tsumero', game: 'shogi', title: '詰めろをかける・受ける',
+            desc: '「次に詰む」を作る、防ぐ',
+            steps: [
+              {
+                type: 'teach', title: '詰めろとは',
+                body: `<p><strong>詰めろ</strong>は、王手ではないけれど「このままなら次に詰む」状態です。
+                  相手は受けるしかないので、攻めの手番を保てます。</p>
+                  <p>逆に、相手に詰めろをかけられたら<strong>必ず受けます</strong>。受け方は3つ。
+                  <strong>玉が逃げる（早逃げ）・攻めてくる駒を取る・逃げ道をあける／ふさがれるマスを守る</strong>。</p>`,
+              },
+              {
+                type: 'move', shape: BIG,
+                state: { board: { '31': 'k', '24': 'p', '53': 'G', '99': 'K' }, hands: { b: { G: 1 }, w: {} }, turn: 'b' },
+                goal: (r) => !NS_SHOGI.inCheck(r.board, 'w') && NS_SHOGI.findMateIn1({ ...r.next, turn: 'b' }).length > 0,
+                prompt: '<strong>詰めろ</strong>をかけてください（王手ではなく、「次に詰む」形を作る手）。',
+                hint: '5三の金を、玉に1マス近づけます。',
+                why: '4三金。次に3二金の頭金で詰みます。王手をかけずに、逃げ道を先に消しました。',
+              },
+              {
+                type: 'move', shape: BIG,
+                state: { board: { '61': 'k', '42': 'l', '51': 'p', '82': 'G', '99': 'K' }, hands: { b: { G: 1 }, w: {} }, turn: 'b' },
+                goal: (r) => !NS_SHOGI.inCheck(r.board, 'w') && NS_SHOGI.findMateIn1({ ...r.next, turn: 'b' }).length > 0,
+                prompt: 'もう1問。<strong>詰めろ</strong>をかけてください。',
+                hint: '玉の真下を1マスあけたところ（6三）に金を置くと、逃げ道が消えます。',
+                why: '6三金。次に8二の金を7二へ寄れば詰みます。',
+              },
+              {
+                type: 'move', shape: BIG,
+                state: { board: { '11': 'k', '69': 'K', '76': 'L', '88': '+r' }, hands: { b: {}, w: { S: 1 } }, turn: 'b' },
+                goal: (r) => !NS_SHOGI.findMateIn1(r.next).length,
+                prompt: '今度は受けの問題です。相手は<strong>銀を持っていて、次に詰ませる手</strong>があります。詰まないように受けてください。',
+                hint: 'このままだと5八銀で詰みます。玉を広いほうへ逃がします。',
+                why: '5九玉（早逃げ）。5八銀と打たれても、もう詰みません。',
+              },
+              {
+                type: 'move', shape: BIG,
+                state: { board: { '11': 'k', '48': '+r', '57': 'S', '69': 'K' }, hands: { b: {}, w: { G: 1, S: 1 } }, turn: 'b' },
+                goal: (r) => !NS_SHOGI.findMateIn1(r.next).length,
+                prompt: 'もう1問、受けてください。相手は金と銀を持っています。',
+                hint: 'いちばん確実な受けは、攻めてくる駒を取ることです。',
+                why: '4八銀（竜を取る）。攻めの中心の竜を消せば、持ち駒の金銀だけでは詰みません（6八銀と逃げ道をあける受けもあります）。',
+              },
+            ],
+          },
+          {
+            id: 'shogi.kuzushi2', game: 'shogi', title: '囲いの崩し方',
+            desc: '美濃は端、矢倉は上から',
+            steps: [
+              {
+                type: 'teach', title: '囲いには急所がある',
+                body: `<p><strong>美濃囲い</strong>は横からの攻めに強い反面、<strong>端（9筋）と玉頭</strong>が急所です。
+                  端に角や桂を打ち込む手がよく効きます。</p>
+                  <p><strong>矢倉囲い</strong>は上からの攻めに強い反面、<strong>横（金の側面）と端</strong>が急所です。
+                  竜で横から金を取る、端に駒を打つ、といった攻めが効きます。</p>
+                  <p>下の問題は、相手が実際に囲いを組んでいる形です。</p>`,
+                board: { shape: BIG, position: { '82': 'k', '72': 's', '61': 'g', '52': 'g', '83': 'p', '73': 'p', '63': 'p', '94': 'p' },
+                  marks: { '93': 'hint', '92': 'hint' }, coords: true },
+              },
+              {
+                type: 'move', shape: BIG, goal: 'mate',
+                state: { board: { '52': 'g', '61': 'g', '62': 'G', '63': 'p', '72': 's', '73': 'p', '82': 'k', '83': 'p', '93': 'R', '94': 'p', '99': 'K' }, hands: { b: { B: 1, G: 1 }, w: {} }, turn: 'b' },
+                prompt: '相手は美濃囲い。1手で詰ませてください。',
+                hint: '9三の飛車が端から利いています。玉の横の端のマスは？',
+                why: '9二金。端の飛車に支えられた金で詰み。美濃囲いは端が弱点です。',
+              },
+              {
+                type: 'mateIn', moves: 3, shape: BIG, coords: true,
+                state: { board: { '52': 'g', '61': 'g', '63': 'p', '72': 's', '73': 'p', '82': 'k', '83': 'p', '85': 'N', '94': 'p', '99': 'K' }, hands: { b: { B: 1, G: 1 }, w: {} }, turn: 'b' },
+                prompt: '美濃囲いを<strong>3手</strong>で崩して詰ませてください。',
+                hint: '端（9筋）に、角を打ち込みます。',
+                why: '9三角（端角）。玉が9二へ逃げても、8二金で詰みます（一例）。',
+              },
+              {
+                type: 'mateIn', moves: 3, shape: BIG, coords: true,
+                state: { board: { '14': 'p', '22': 'k', '23': 'B', '24': 'p', '32': 'g', '33': 's', '34': 'p', '42': '+R', '43': 'g', '44': 'p', '99': 'K' }, hands: { b: { N: 1 }, w: {} }, turn: 'b' },
+                prompt: '相手は矢倉囲い。<strong>3手</strong>で詰ませてください。',
+                hint: '竜で、横から金を取ります。',
+                why: '3二竜（金を取る）。1三へ逃げても、1二角成で詰みます（一例）。矢倉は横からの攻めに弱い形です。',
+              },
+            ],
+          },
+        ],
+      },
     ],
   };
 
@@ -10417,6 +10805,153 @@ const NS_DMAHJONG = (() => {
           },
         ],
       },
+      {
+        title: '十一　役・読み・点数を広げる',
+        lessons: [
+          {
+            id: 'mahjong.yaku-more', game: 'mahjong', title: 'よく出る役を増やす',
+            desc: '一気通貫・三色・対々和・染め手・一盃口',
+            steps: [
+              {
+                type: 'teach', title: '「組の形」で決まる役',
+                body: `<p><strong>一気通貫（2翻）</strong>：同じ色で 123・456・789 の3つの順子。<br>
+                  <strong>三色同順（2翻）</strong>：萬子・筒子・索子で、同じ数の順子（例：234萬・234筒・234索）。<br>
+                  <strong>一盃口（1翻）</strong>：まったく同じ順子が2つ（例：223344萬）。鳴くとつきません。<br>
+                  <strong>対々和（2翻）</strong>：4つの組が全部、同じ牌3枚（刻子）。ポンしてもつきます。</p>
+                  <p>一気通貫と三色は、<strong>鳴くと1翻に下がります</strong>（それでも役にはなります）。</p>`,
+              },
+              {
+                type: 'yaku', tiles: ['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm8', 'm9', 'p2', 'p3', 'p4', 's5', 's5'],
+                ctx: { tsumo: true, menzen: true }, options: ['ittsu', 'sanshoku', 'tsumo', 'tanyao', 'toitoi'],
+                prompt: '鳴かずにツモであがりました。ついている役を全部選んでください。',
+              },
+              {
+                type: 'yaku', tiles: ['m2', 'm3', 'm4', 'p2', 'p3', 'p4', 's2', 's3', 's4', 'm6', 'm7', 'm8', 'p9', 'p9'],
+                ctx: { tsumo: true, menzen: true }, options: ['ittsu', 'sanshoku', 'tsumo', 'tanyao', 'iipeiko'],
+                prompt: '鳴かずにツモであがりました。ついている役を全部選んでください。',
+              },
+              {
+                type: 'yaku', tiles: ['m2', 'm2', 'm3', 'm3', 'm4', 'm4', 'p5', 'p6', 'p7', 's3', 's4', 's5', 'p9', 'p9'],
+                ctx: { tsumo: true, menzen: true }, options: ['iipeiko', 'chiitoi', 'sanshoku', 'tsumo', 'tanyao'],
+                prompt: '鳴かずにツモであがりました。ついている役を全部選んでください。',
+              },
+              {
+                type: 'yaku', tiles: ['s5', 's5', 's5', 'm9', 'm9', 'm9', 'z3', 'z3'],
+                ctx: { menzen: false, melds: [['m2', 'm2', 'm2'], ['p8', 'p8', 'p8']] },
+                options: ['toitoi', 'tanyao', 'yakuhai', 'tsumo'],
+                prompt: '2萬と8筒をポンしてから、ロンであがりました（手の中は下の8枚）。ついている役を全部選んでください。',
+              },
+              {
+                type: 'teach', title: '「色」で決まる役（染め手）',
+                body: `<p><strong>混一色（3翻）</strong>：1種類の数牌（たとえば筒子だけ）＋字牌。<br>
+                  <strong>清一色（6翻）</strong>：1種類の数牌だけ。字牌も入れない。</p>
+                  <p>どちらも鳴いてもつき、鳴くと1翻下がります（混一色2翻、清一色5翻）。
+                  打点が大きいので、配牌で1色に偏っていたら狙う価値があります。</p>`,
+              },
+              {
+                type: 'yaku', tiles: ['p1', 'p2', 'p3', 'p3', 'p4', 'p5', 'p6', 'p7', 'p8', 'z2', 'z2', 'z2', 'p9', 'p9'],
+                ctx: { tsumo: true, menzen: true }, options: ['honitsu', 'chinitsu', 'ittsu', 'tsumo', 'yakuhai'],
+                prompt: '鳴かずにツモであがりました（あなたは東家、東場です。南は役牌ではありません）。ついている役を全部選んでください。',
+              },
+              {
+                type: 'yaku', tiles: ['s1', 's2', 's3', 's3', 's4', 's5', 's5', 's6', 's7', 's7', 's8', 's9', 's9', 's9'],
+                ctx: { tsumo: true, menzen: true }, options: ['honitsu', 'chinitsu', 'ittsu', 'tsumo', 'toitoi'],
+                prompt: '鳴かずにツモであがりました。ついている役を全部選んでください。',
+              },
+              {
+                type: 'quiz', prompt: '789筒をチーして、一気通貫であがりました。一気通貫は何翻になりますか。',
+                choices: [
+                  { t: '1翻' },
+                  { t: '2翻', why: '2翻は鳴いていないとき。鳴くと1翻に下がります。' },
+                  { t: '役にならない', why: '一気通貫は鳴いても役になります（一盃口やピンフとは違います）。' },
+                ],
+                answer: 0,
+                why: '一気通貫・三色同順・混一色・清一色は、鳴くと1翻下がります（食い下がり）。',
+              },
+            ],
+          },
+          {
+            id: 'mahjong.yomi-suji', game: 'mahjong', title: '待ち読み：スジ',
+            desc: '捨て牌から、当たらない牌を探す',
+            steps: [
+              {
+                type: 'teach', title: 'スジは「両面には当たらない」',
+                body: `<p>リーチした人が<strong>4</strong>を捨てていれば、<strong>1と7</strong>は両面待ちでは当たりません
+                  （23の両面は1と4、56の両面は4と7で待つので、4が捨ててあればフリテンになる）。</p>
+                  <p>同じように、<strong>1-4-7、2-5-8、3-6-9</strong> がスジの組です。</p>
+                  <p>4・5・6は、両側の2枚（4なら1と7）がどちらも捨ててあって初めて安全度が上がります（<strong>両スジ</strong>）。
+                  片側だけなら<strong>片スジ</strong>で、もう片側の両面には当たります。</p>
+                  <p>スジは<strong>両面待ちに当たらない</strong>だけです。単騎・双ポン・嵌張には当たるので、現物ほど安全ではありません。</p>`,
+              },
+              {
+                type: 'safetile',
+                discards: ['m4', 'p1', 's9', 'z3', 'z5', 'p8', 's2', 'm9'],
+                candidates: ['m1', 'p5', 's5', 's6', 'z6'],
+                prompt: '南家がリーチ。捨て牌は下のとおりです。候補のうち、<strong>いちばん安全な牌</strong>を選んでください（現物はありません）。',
+              },
+              {
+                type: 'safetile',
+                discards: ['p2', 'm1', 'p8', 'z1', 's9', 'z7', 'm3', 's1'],
+                candidates: ['p5', 'm7', 's4', 'p4', 'm4'],
+                prompt: 'もう1問。候補のうち、<strong>いちばん安全な牌</strong>を選んでください。',
+              },
+              {
+                type: 'quiz', prompt: 'リーチした人が4萬を捨てています。1萬が安全とは言いきれないのは、どんな待ちのときですか。',
+                choices: [
+                  { t: '1萬の単騎待ちや、1萬の双ポン待ち' },
+                  { t: '23萬の両面待ち', why: '23萬の両面は1萬と4萬で待ちます。4萬を捨てているので、この形ならフリテンでロンできません。' },
+                  { t: 'どんな待ちでも安全', why: 'スジは両面待ちにしか効きません。' },
+                ],
+                answer: 0,
+                why: 'スジが防ぐのは両面待ちだけ。1萬なら、単騎や双ポンには当たります（4萬のスジの7萬なら、嵌張にも当たることがあります）。',
+              },
+            ],
+          },
+          {
+            id: 'mahjong.score', game: 'mahjong', title: '点数の目安',
+            desc: 'よく出る点数を覚える',
+            steps: [
+              {
+                type: 'teach', title: '符と翻',
+                body: `<p>点数は<strong>翻（役の数）</strong>と<strong>符（手の形の細かい点）</strong>で決まります。
+                  符の数え方は細かいので、まずはよく出る点数を覚えれば十分です。</p>
+                  <p>鳴かずにロンなら、多くは<strong>30符</strong>か<strong>40符</strong>。子のロンで：<br>
+                  30符：1翻 1000点 ／ 2翻 2000点 ／ 3翻 3900点<br>
+                  40符：1翻 1300点 ／ 2翻 2600点 ／ 3翻 5200点</p>
+                  <p>親はおよそ<strong>1.5倍</strong>（30符2翻なら2900点）。</p>
+                  <p>5翻からは符に関係なく決まります。<strong>満貫</strong> 子8000・親12000、<strong>跳満</strong>（6〜7翻）子12000・親18000、
+                  <strong>倍満</strong>（8〜10翻）子16000・親24000、<strong>三倍満</strong>（11〜12翻）子24000・親36000、<strong>役満</strong> 子32000・親48000。</p>
+                  <p>4翻は30符なら7700点（子）ですが、このアプリの4人打ちでは、符を数えない簡単な表で満貫（8000点）として扱っています。</p>`,
+              },
+              {
+                type: 'quiz', prompt: '子が30符3翻でロンしました。何点ですか。',
+                choices: [{ t: '3900点' }, { t: '2000点', why: '30符2翻の点数です。' }, { t: '5200点', why: '40符3翻の点数です。' }, { t: '5800点', why: '親の30符3翻です。' }],
+                answer: 0, why: '30符3翻は、子のロンで3900点。よく出るので丸ごと覚えます。',
+              },
+              {
+                type: 'quiz', prompt: '親が30符2翻でロンしました。何点ですか。',
+                choices: [{ t: '2900点' }, { t: '2000点', why: '子の30符2翻です。親は約1.5倍になります。' }, { t: '3900点', why: '子の30符3翻・親の40符2翻です。' }],
+                answer: 0, why: '子の2000点のおよそ1.5倍で、2900点です。',
+              },
+              {
+                type: 'quiz', prompt: '子の満貫は何点ですか。',
+                choices: [{ t: '8000点' }, { t: '12000点', why: '親の満貫、または子の跳満です。' }, { t: '7700点', why: '4翻30符の点数です（切り上げ満貫のルールなら8000点）。' }],
+                answer: 0, why: '満貫は子8000点・親12000点。ここから上は、跳満・倍満…と区切りで覚えます。',
+              },
+              {
+                type: 'quiz', prompt: '子が7翻でロンしました。何点ですか。',
+                choices: [{ t: '12000点（跳満）' }, { t: '8000点（満貫）', why: '満貫は5翻まで。6〜7翻は跳満です。' }, { t: '16000点（倍満）', why: '倍満は8翻から。' }],
+                answer: 0, why: '6〜7翻は跳満で、子12000点・親18000点です。',
+              },
+              {
+                type: 'quiz', prompt: '子が40符2翻でロンしました。何点ですか。',
+                choices: [{ t: '2600点' }, { t: '2000点', why: '30符2翻の点数です。' }, { t: '3900点', why: '30符3翻（子）の点数です。' }],
+                answer: 0, why: '40符は30符より少し高く、1翻1300・2翻2600・3翻5200点です。',
+              },
+            ],
+          },
+        ],
+      },
     ],
   };
 
@@ -10512,6 +11047,39 @@ const NS_APP = await (async () => {
     return root;
   }
 
+  // ── 今日の1問・実力テスト：カリキュラムの問題から作る「仮のレッスン」
+  //    対局や陣形づくりのような長いものは除く。どのレッスンの問題かは、解いたあとに表示する
+  const DRILL_SKIP = new Set(['teach', 'play', 'play4', 'build']);
+  function problemPool(g) {
+    const out = [];
+    for (const l of flat(g)) l.steps.forEach((s, i) => {
+      if (!DRILL_SKIP.has(s.type)) out.push({ lesson: l, step: s, i });
+    });
+    return out;
+  }
+  const hashStr = (str) => { let h = 2166136261; for (const c of str) { h ^= c.charCodeAt(0); h = Math.imul(h, 16777619); } return h >>> 0; };
+  function todayKey() {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+  function syntheticLesson(g, kind) {
+    const pool = problemPool(g);
+    let picks;
+    if (kind === '_daily') {
+      picks = [pool[hashStr(g.id + todayKey()) % pool.length]];
+    } else {
+      const a = [...pool];
+      for (let k = a.length - 1; k > 0; k--) { const j = (Math.random() * (k + 1)) | 0; [a[k], a[j]] = [a[j], a[k]]; }
+      picks = a.slice(0, 10);
+    }
+    return {
+      id: kind === '_daily' ? `${g.id}._daily` : `${g.id}._test`,
+      game: g.id,
+      title: kind === '_daily' ? `今日の1問（${todayKey()}）` : '実力テスト（10問）',
+      steps: picks.map((p) => ({ ...p.step, fromLesson: p.lesson.title })),
+    };
+  }
+
   function viewGame(gameId) {
     const g = GAMES[gameId];
     const root = el('div', 'shell');
@@ -10522,6 +11090,34 @@ const NS_APP = await (async () => {
     const lessons = flat(g);
     const nextId = lessons.find((l) => !store.isDone(l.id))?.id;
     let n = 0;
+
+    // 今日の1問・実力テスト・苦手
+    {
+      const daily = store.state.lessons[`${g.id}._daily`];
+      const doneToday = daily && daily.day === todayKey();
+      const list = el('div', 'llist');
+      const row = (no, t, d, s, href) => {
+        const b = el('button', 'lrow');
+        b.innerHTML = `<span class="lrow__no">${no}</span>
+          <span><span class="lrow__t">${t}</span><br><span class="lrow__d">${d}</span></span>
+          <span class="lrow__s">${s}</span>`;
+        b.addEventListener('click', () => (location.hash = href));
+        list.appendChild(b);
+      };
+      row('☀', '今日の1問', '毎日1問。全レッスンの中から出ます', doneToday ? '済' : '', `#/${g.id}/_daily`);
+      row('✎', '実力テスト', '全範囲からランダムに10問。型の名前は出ません', '', `#/${g.id}/_test`);
+      // 苦手：一発正解の割合が低い、修了済みのレッスン
+      const weak = lessons
+        .map((l) => ({ l, r: store.state.lessons[l.id] }))
+        .filter((x) => x.r && x.r.total >= 2 && x.r.correct / x.r.total < 0.7)
+        .sort((a, b) => a.r.correct / a.r.total - b.r.correct / b.r.total)
+        .slice(0, 3);
+      for (const { l, r } of weak) {
+        row('△', `苦手：${l.title}`, `前回 ${r.total}問中 ${r.correct}問を一発正解`, 'もう一度', `#/${g.id}/${l.id}`);
+      }
+      root.appendChild(el('h2', 'chapter', '毎日の練習'));
+      root.appendChild(list);
+    }
 
     // 復習：間違えたままの問題があるレッスン
     const pend = store.pendingReviews(`${g.id}.`);
@@ -10573,8 +11169,9 @@ const NS_APP = await (async () => {
   function viewLesson(gameId, lessonId, mode = '') {
     const g = GAMES[gameId];
     const lessons = flat(g);
-    const idx = lessons.findIndex((l) => l.id === lessonId);
-    const lesson = lessons[idx];
+    const synthetic = lessonId === '_daily' || lessonId === '_test';
+    const idx = synthetic ? -1 : lessons.findIndex((l) => l.id === lessonId);
+    const lesson = synthetic ? syntheticLesson(g, lessonId) : lessons[idx];
     if (!lesson) { location.hash = `#/${gameId}`; return el('div'); }
 
     const root = el('div', 'shell');
@@ -10590,8 +11187,10 @@ const NS_APP = await (async () => {
       : null;
     new LessonRunner(lesson, host, {
       only,
+      // 実力テストは記録しない（毎回ちがう問題なので）。今日の1問は連続日数に数える
+      transient: lessonId === '_test',
       onFinish: ({ correct, total, review }) => {
-        const next = review ? null : lessons[idx + 1];
+        const next = review || synthetic ? null : lessons[idx + 1];
         const stage = el('div', 'stage');
         stage.style.setProperty('--tone', `var(--${g.id})`);
         stage.innerHTML = `
