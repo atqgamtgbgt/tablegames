@@ -5460,7 +5460,7 @@ const NS_LESSON = (() => {
             finished = true;
             const types = [...new Set(answer.flatMap((w) => M.waitType(hand, w, sets)))];
             const names = types.map((t) => M.WAIT_TYPES[t]?.ja).filter(Boolean).join('・');
-            ctx.solved(`<b>全部そろいました</b>アガリ牌は ${answer.map(M.tileName).join('・')}。${names ? `待ちの形は<strong>${names}</strong>です。` : ''}`);
+            ctx.solved(`<b>全部そろいました</b>アガリ牌は ${answer.map(M.tileName).join('・')}。${names ? `待ちの形は<strong>${names}</strong>です。` : ''}${s.why ? `<br>${s.why}` : ''}`);
           } else {
             ctx.say(`あと ${answer.length - hit.length} 種類あります。`);
           }
@@ -5744,18 +5744,35 @@ const NS_LESSON = (() => {
         const rv = K.explainDiscard(hand, t, sets);
         const l = rv.lines[0];
         sfx.place('mahjong');
+        // strict の問題は、最善と同じ（シャンテン数も受け入れ枚数も同じ）牌だけを正解にする
+        const mine = table.find((r) => r.tile === t);
+        const good = s.strict
+          ? !!mine && mine.shanten === best.shanten && mine.tiles === best.tiles
+          : rv.level === 'ok';
+        if (s.strict && !good && rv.level === 'ok') {
+          ctx.miss();
+          const st = {};
+          hand.forEach((x, j) => { if (x === t) st[j] = 'ng'; });
+          paint(st, false);
+          ctx.say(`<b>悪くはありませんが、もっと良い牌があります</b>`
+            + `<span class="note">${M.tileName(t)}切りの受け入れは${mine ? mine.tiles : 0}枚。最善は${best.tiles}枚です。</span>`
+            + `${s.hint ? `<br><span class="note">ヒント：${s.hint}</span>` : ''}`, 'ng');
+          return;
+        }
         const st = {};
-        hand.forEach((x, j) => { if (x === t) st[j] = rv.level === 'ok' ? 'ok' : 'ng'; });
-        if (rv.level === 'ok') {
+        hand.forEach((x, j) => { if (x === t) st[j] = good ? 'ok' : 'ng'; });
+        if (good) {
           paint(st, true);
           note.innerHTML = tableHTML(table, t);
-          ctx.solved(`<b>${l.what}</b>${l.why || ''}${l.better ? `<br><span class="note">${l.better.label}：${l.better.reason}</span>` : ''}`);
+          ctx.solved(`<b>${l.what}</b>${l.why || ''}${l.better ? `<br><span class="note">${l.better.label}：${l.better.reason}</span>` : ''}`
+            + `${s.why ? `<br>${s.why}` : ''}`);
         } else {
           ctx.miss();
           paint(st, false);
           ctx.say(`<b>${l.what}</b><span class="note">${l.why}</span>`
             + `${l.better ? `<br><span class="note">こうすれば：${l.better.label}（${l.better.reason}）</span>` : ''}`
-            + `${l.lesson ? `<br><span class="note">${l.lesson}</span>` : ''}`, 'ng');
+            + `${l.lesson ? `<br><span class="note">${l.lesson}</span>` : ''}`
+            + `${s.hint ? `<br><span class="note">ヒント：${s.hint}</span>` : ''}`, 'ng');
         }
       },
     });
@@ -5773,7 +5790,7 @@ const NS_LESSON = (() => {
           ? `<b>${tied.map((r) => M.tileName(r.tile)).join('・')}のどれでも同じです</b>`
             + `どれを切っても${best.kinds}種${best.tiles}枚を受け入れます。`
             + `<span class="note">迷ったら、いちばん使い道の少ない牌（字牌→端→中）から切ります。</span>`
-          : `<b>${M.tileName(best.tile)}切りが最善です</b>${best.kinds}種${best.tiles}枚を受け入れます。`);
+          : `<b>${M.tileName(best.tile)}切りが最善です</b>${best.kinds}種${best.tiles}枚を受け入れます。${s.why ? `<br>${s.why}` : ''}`);
       },
     }]);
   };
@@ -5863,8 +5880,38 @@ const NS_LESSON = (() => {
       } else {
         const moves = S.allLegalMoves(state, shape);
         if (!moves.length) return;
-        const safe = moves.filter((m) => !S.findMateIn1(S.applyMove(state, m, shape), shape).length);
-        const pick = (safe.length ? safe : moves)[0];
+        // 王手の連続で n 手以内に詰むか（詰将棋なので攻め方は王手だけ）
+        const memo = new Map();
+        const mateWithin = (st, n) => {
+          const k = n + st.turn + JSON.stringify(st.board) + JSON.stringify(st.hands);
+          if (memo.has(k)) return memo.get(k);
+          const r = mateWithinRaw(st, n);
+          memo.set(k, r);
+          return r;
+        };
+        const mateWithinRaw = (st, n) => {
+          for (const mv of S.allLegalMoves(st, shape)) {
+            const s1 = S.applyMove(st, mv, shape);
+            if (!S.inCheck(s1.board, S.opponent(st.turn), shape)) continue;
+            const reps = S.allLegalMoves(s1, shape);
+            if (!reps.length) return true;
+            if (n > 1 && reps.every((r) => mateWithin(S.applyMove(s1, r, shape), n - 2))) return true;
+          }
+          return false;
+        };
+        // いちばん長く逃げられる手を選ぶ（1手で詰まない手 → 3手でも詰まない手）
+        const left = limit - ply - 1;   // この応手のあと、攻め方に残る手数
+        let pool = moves.filter((m) => !mateWithin(S.applyMove(state, m, shape), 1));
+        if (!pool.length) pool = moves;
+        const started = Date.now();
+        for (const n of [3, 5]) {
+          if (left < n) break;
+          // 長く読みすぎて画面が止まらないように、1.5秒を超えたら深い読みは打ち切る
+          if (Date.now() - started > 1500) break;
+          const longer = pool.filter((m) => !mateWithin(S.applyMove(state, m, shape), n));
+          if (longer.length) pool = longer;
+        }
+        const pick = pool[0];
         state = S.applyMove(state, pick, shape);
         paint({ ...(pick.from ? { [pick.from]: 'last' } : {}), [pick.to]: 'last' });
       }
@@ -6014,6 +6061,144 @@ const NS_LESSON = (() => {
    * 目標の形ができるまで、自由に指す。
    * 「囲いを組む」のように、手順ではなく形を覚えてほしいときに使う。
    */
+  // ── チェス：数手の組み合わせで駒得する問題
+  //    s.moves = 自分が指す手数（2なら「自分・相手・自分」）、s.gain = 最低これだけ得すれば正解
+  //    判定は駒の点数だけで読む小さな探索（取り合いは最後まで読む）。相手は最善の応手を選ぶ。
+  const TAC_VALUE = { P: 1, N: 3, B: 3, R: 5, Q: 9, K: 0 };
+  const tacMaterial = (b) => Object.values(b).reduce(
+    (a, p) => a + (p === p.toUpperCase() ? 1 : -1) * TAC_VALUE[p.toUpperCase()], 0);
+  function tacQuiet(b, turn, alpha, beta, depth, opts) {
+    const stand = tacMaterial(b);
+    if (depth === 0) return stand;
+    const caps = C.allLegalMoves(b, turn, opts).filter((mv) => b[mv.to]);
+    if (turn === 'w') {
+      let best = stand;
+      if (best >= beta) return best;
+      alpha = Math.max(alpha, best);
+      for (const mv of caps) {
+        best = Math.max(best, tacQuiet(C.applyMove(b, mv.from, mv.to, opts), 'b', alpha, beta, depth - 1, opts));
+        alpha = Math.max(alpha, best);
+        if (alpha >= beta) break;
+      }
+      return best;
+    }
+    let best = stand;
+    if (best <= alpha) return best;
+    beta = Math.min(beta, best);
+    for (const mv of caps) {
+      best = Math.min(best, tacQuiet(C.applyMove(b, mv.from, mv.to, opts), 'w', alpha, beta, depth - 1, opts));
+      beta = Math.min(beta, best);
+      if (alpha >= beta) break;
+    }
+    return best;
+  }
+  function tacSearch(b, turn, d, alpha, beta, opts) {
+    const ms = C.allLegalMoves(b, turn, opts);
+    if (!ms.length) return C.inCheck(b, turn, opts) ? (turn === 'w' ? -1000 - d : 1000 + d) : 0;
+    if (d === 0) return tacQuiet(b, turn, alpha, beta, 3, opts);
+    const next = turn === 'w' ? 'b' : 'w';
+    let best = turn === 'w' ? -1e9 : 1e9;
+    for (const mv of ms) {
+      const v = tacSearch(C.applyMove(b, mv.from, mv.to, opts), next, d - 1, alpha, beta, opts);
+      if (turn === 'w') { best = Math.max(best, v); alpha = Math.max(alpha, best); }
+      else { best = Math.min(best, v); beta = Math.min(beta, best); }
+      if (alpha >= beta) break;
+    }
+    return best;
+  }
+
+  STEPS.combo = (ctx) => {
+    const s = ctx.step;
+    const total = s.moves || 2;
+    const need = s.gain ?? 3;
+    ctx.prompt(s.prompt || `<strong>${total}手</strong>の組み合わせで駒得してください。相手は最善で応じます。`);
+    const { board, opts } = boardSpec(ctx, s);
+    const info = el('p', 'note');
+    ctx.mount.appendChild(info);
+    const base = tacMaterial(s.board);
+    let position, from, n, busy, token = 0;
+
+    const paint = (extra = {}) => board.setPosition(position, extra);
+    const reset = () => {
+      token++;
+      position = { ...s.board }; from = null; n = 0; busy = false;
+      ctx.clear(); paint();
+      info.textContent = `あなたの番です（あと${total}手）。`;
+    };
+    const fail = (msg) => {
+      ctx.miss();
+      busy = true;
+      const my = ++token;
+      ctx.say(`<b>${msg}</b>${s.hint ? `<br><span class="note">${s.hint}</span>` : ''}`, 'ng');
+      setTimeout(() => { if (my === token) { reset(); ctx.say(`<b>${msg}</b>もう一度どうぞ。`, 'ng'); } }, 1600);
+    };
+    const win = (msg) => {
+      busy = true;
+      ctx.solved(`<b>${msg}</b>${s.why || ''}`);
+    };
+
+    const afterMyMove = (mark) => {
+      n++;
+      paint(mark);
+      if (C.gameStatus(position, 'b', opts) === 'checkmate') return win('チェックメイトです');
+      const left = total - n;
+      // 相手の応手から先を読んで、最後にどれだけ得をしているか
+      const v = tacSearch(position, 'b', 1 + 2 * left, -1e9, 1e9, opts) - base;
+      if (v >= 900) {
+        if (left === 0) return win('詰みが見えています');
+      } else if (v < need) {
+        return fail(n === 1 ? 'その手では、相手にうまく応じられてしまいます。' : 'ここで決めきれませんでした。');
+      }
+      if (left === 0) return win(`駒得が決まりました（+${v}点）`);
+      busy = true;
+      info.textContent = '相手が応じます…';
+      const my = token;
+      setTimeout(() => {
+        if (my !== token) return;
+        // 相手は、こちらの得がいちばん小さくなる手を選ぶ
+        let pick = null, bestV = Infinity;
+        for (const mv of C.allLegalMoves(position, 'b', opts)) {
+          const v2 = tacSearch(C.applyMove(position, mv.from, mv.to, opts), 'w', 2 * left - 1, -1e9, 1e9, opts);
+          if (v2 < bestV) { bestV = v2; pick = mv; }
+        }
+        if (!pick) { busy = false; return; }
+        position = C.applyMove(position, pick.from, pick.to, opts);
+        paint({ [pick.from]: 'last', [pick.to]: 'last' });
+        busy = false;
+        info.textContent = `あなたの番です（あと${left}手）。`;
+      }, 550);
+    };
+
+    board.onPick = (sq) => {
+      if (busy) return;
+      const mine = (x) => position[x] && C.colorOf(position[x]) === 'w';
+      if (from === null) {
+        if (!mine(sq)) return;
+        from = sq;
+        const m = { [sq]: 'sel' };
+        for (const t of C.legalMoves(position, sq, opts)) m[t] = 'move';
+        paint(m);
+        return;
+      }
+      if (sq === from) { from = null; paint(); return; }
+      if (!C.legalMoves(position, from, opts).includes(sq)) {
+        if (mine(sq)) { from = null; board.onPick(sq); }
+        return;
+      }
+      const f = from;
+      from = null;
+      position = C.applyMove(position, f, sq, opts);
+      sfx.place('chess');
+      afterMyMove({ [f]: 'last', [sq]: 'last' });
+    };
+
+    ctx.actions([
+      { label: 'やり直す', variant: 'ghost', onClick: reset },
+      { label: 'ヒント', variant: 'ghost', onClick: () => { ctx.miss(); ctx.say(s.hint || 'まず王手、次に守られていない駒を探します。'); } },
+    ]);
+    reset();
+  };
+
   STEPS.build = (ctx) => {
     const s = ctx.step;
     const shape = s.shape || S.BIG;
@@ -6145,6 +6330,108 @@ const NS_DCHESS = (() => {
   // data/chess.js — チェスのカリキュラム
   // 方針: 表で駒の動きを一覧させない。1レッスン1駒、必ず盤を触って終わる。
   // アンパッサンとキャスリングは最後まで出さない（最初に出すと必ず折れる）。
+
+  // ── 型の総復習用：盤を左右反転した問題も作り、順番を混ぜる（毎回同じ順＝復習の番号がずれない）
+  const mirrorBoard = (b) => Object.fromEntries(Object.entries(b).map(([sq, p]) =>
+    ['abcdefgh'['abcdefgh'.length - 1 - 'abcdefgh'.indexOf(sq[0])] + sq[1], p]));
+  function drill(list) {
+    const steps = [];
+    list.forEach(([board, name], i) => {
+      const b = i % 2 ? mirrorBoard(board) : board;
+      steps.push({
+        type: 'move', side: 'w', goal: 'mate', board: b,
+        prompt: '1手でチェックメイトにしてください。',
+        hint: 'キングの逃げ道を数えてから、どの型に近いかを考えます。',
+        why: `型は<strong>${name}</strong>でした。`,
+      });
+    });
+    // 決まった並べ替え（型の順番どおりに出ないように）
+    const order = [3, 0, 5, 1, 6, 2, 4];
+    return order.filter((n) => n < steps.length).map((n) => steps[n]);
+  }
+
+  // ── タクティクスの問題。すべてエンジンで「その手だけが駒得になる」ことを確かめてある
+  //    [盤, 正解の手（複数可）, 型の名前, ヒント, 解説]
+  const TAC = {
+    fork: [
+      [{ g1: 'K', d5: 'N', g8: 'k', c6: 'q', f7: 'p', g7: 'p', h7: 'p', a2: 'P', b2: 'P', f2: 'P', g2: 'P', h2: 'P' },
+        ['d5e7'], 'ナイトの両取り',
+        'g8のキングと c6のクイーン。ナイトが1手で両方に届くマスは？',
+        'Ne7+。キングへの王手とクイーンへの攻撃が同時にかかり、王手をよけた次にクイーンが取れます。'],
+      [{ g1: 'K', d1: 'Q', h8: 'k', a5: 'r', h7: 'p', g6: 'p', f2: 'P', g2: 'P', h2: 'P' },
+        ['d1d4', 'd1d8'], 'クイーンの両取り',
+        'a5のルークは守られていません。キングへの王手と同時に、a5にも届くマスは？',
+        'Qd4+（または Qd8+）。王手をよけたあと、a5のルークを取ります。クイーンは8方向に利くので、両取りの名手です。'],
+      [{ g1: 'K', e4: 'N', h7: 'k', d7: 'q', a2: 'P', f2: 'P', g2: 'P', h2: 'P' },
+        ['e4f6'], 'ナイトの両取り',
+        'h7のキングと d7のクイーン。両方にナイトが届くマスがあります。',
+        'Nf6+。キングとクイーンの両取り（ロイヤルフォーク）です。'],
+    ],
+    pin: [
+      [{ g1: 'K', e1: 'R', d4: 'P', e8: 'k', e6: 'n', f7: 'p', a7: 'p', b7: 'p', f2: 'P', g2: 'P', h2: 'P' },
+        ['d4d5'], 'ピンされた駒を歩で攻める',
+        'e6のナイトは、キングの前にいるので動けません。そこを安い駒で攻めると？',
+        'd5。ナイトはピンされていて逃げられず、次に歩で取られます。f7の歩が取り返しても、歩1枚でナイトが手に入ります。'],
+      [{ g1: 'K', f1: 'B', b3: 'P', g8: 'k', f7: 'q', g7: 'p', h7: 'p', a7: 'p', f2: 'P', g2: 'P', h2: 'P' },
+        ['f1c4'], 'クイーンをピンする',
+        'f7のクイーンと g8のキングが、斜めに並んでいます。',
+        'Bc4。クイーンはキングの前でピンされ、ビショップを取っても b3の歩に取り返されます。ビショップとクイーンの交換です。'],
+      [{ g1: 'K', d1: 'R', b1: 'B', a2: 'P', g8: 'k', d7: 'b', d8: 'q', f7: 'p', g7: 'p', h7: 'p', f2: 'P', g2: 'P', h2: 'P' },
+        ['b1f5'], 'ピンされた駒に攻撃を足す',
+        'd7のビショップは、後ろのクイーンのせいで動きにくい駒です。そこへもう1枚、攻める駒を足します。',
+        'Bf5。d7のビショップに攻めが2枚、守りは1枚。取り合いになると白が駒得します。'],
+    ],
+    skewer: [
+      [{ g1: 'K', b1: 'B', c6: 'k', a8: 'r', g7: 'p', h7: 'p', f2: 'P', g2: 'P', h2: 'P' },
+        ['b1e4'], 'ビショップの串刺し',
+        'c6のキングと a8のルークが、同じ斜めの線に並んでいます。',
+        'Be4+。キングがよけると、後ろの a8のルークが取れます。'],
+      [{ g1: 'K', h1: 'Q', d5: 'k', a5: 'r', g2: 'P', f2: 'P' },
+        ['h1h5'], 'クイーンの串刺し',
+        'd5のキングと a5のルークが、同じ横の段に並んでいます。',
+        'Qh5+。キングがどいたら、a5のルークを取ります。'],
+      [{ g1: 'K', a1: 'R', d6: 'k', h6: 'r', h7: 'p', f2: 'P', g2: 'P', h2: 'P' },
+        ['a1a6'], 'ルークの串刺し',
+        'd6のキングと h6のルークが、同じ6段目に並んでいます。',
+        'Ra6+。キングが6段目から出ると、h6のルークが取れます。'],
+    ],
+    disc: [
+      [{ g1: 'K', e1: 'R', e4: 'B', e8: 'k', b7: 'q', a7: 'p', f7: 'p', g7: 'p', f2: 'P', g2: 'P', h2: 'P' },
+        ['e4b7', 'e4c6'], 'ディスカバードチェック',
+        'e4のビショップがどけば、e1のルークが e8のキングに王手をかけます。ビショップはどこへ行ってもかまいません。',
+        'Bxb7+（Bc6++ も同じく勝ち）。ビショップがクイーンを取りながら、後ろのルークで王手。相手は取り返せません。'],
+      [{ g1: 'K', e1: 'R', e5: 'N', e8: 'k', c6: 'r', b7: 'p', a7: 'p', f2: 'P', g2: 'P', h2: 'P' },
+        ['e5c6'], 'ディスカバードチェック',
+        'c6のルークは b7の歩が守っていますが、王手をかけながら取れば取り返されません。',
+        'Nxc6+。ナイトがルークを取ると同時に、e1のルークで王手。相手は王手をよけるのが先なので、ナイトは次の手で逃げられます。'],
+      [{ g1: 'K', b1: 'B', e4: 'N', h7: 'k', d7: 'q', g7: 'p', a7: 'p', f2: 'P', g2: 'P', h2: 'P' },
+        ['e4f6', 'e4c5'], 'ディスカバードチェック',
+        'e4のナイトがどけば、b1のビショップが h7のキングに王手をかけます。ナイトの行き先で、クイーンを狙えるのは？',
+        'Nf6+（両王手）または Nc5+。王手をよけている間に、ナイトがd7のクイーンを取ります。'],
+    ],
+  };
+
+  const FL = 'abcdefgh';
+  const mirSq = (sq) => FL[7 - FL.indexOf(sq[0])] + sq[1];
+  const mirrorTac = ([b, ans, name, hint, why]) => [
+    Object.fromEntries(Object.entries(b).map(([sq, p]) => [mirSq(sq), p])),
+    ans.map((a) => mirSq(a.slice(0, 2)) + mirSq(a.slice(2))), name, null, why.replace(/[a-h](?=\d)/g, (f) => FL[7 - FL.indexOf(f)]),
+  ];
+
+  function tacStep([board, ans, name, hint, why], hidden = false) {
+    return {
+      type: 'bestmove', side: 'w', board,
+      answers: ans.map((a) => ({ from: a.slice(0, 2), to: a.slice(2) })),
+      prompt: hidden ? '駒得する手を見つけてください。' : `<strong>${name}</strong>で駒得する手を見つけてください。`,
+      hint: hidden || !hint ? 'まず王手、次に守られていない駒、最後にキングと同じ線に並んだ駒を探します。' : hint,
+      why: hidden ? `型は<strong>${name}</strong>でした。${why}` : why,
+    };
+  }
+
+  function tacDrill() {
+    const all = [TAC.fork[0], TAC.skewer[1], TAC.pin[1], TAC.disc[1], TAC.fork[2], TAC.pin[0], TAC.disc[2], TAC.skewer[2]];
+    return all.map((p, i) => tacStep(i % 2 ? mirrorTac(p) : p, true));
+  }
 
   const chess = {
     id: 'chess',
@@ -7210,6 +7497,345 @@ const NS_DCHESS = (() => {
           },
         ],
       },
+      {
+        title: '六　詰みの型',
+        lessons: [
+          {
+            id: 'chess.pat-back', game: 'chess', title: 'バックランクメイト',
+            desc: '自分のポーンが逃げ道をふさぐ',
+            steps: [
+              {
+                type: 'teach', title: '最後の段は落とし穴',
+                body: `<p>キャスリングしたキングの前には、たいていポーンが3枚並んでいます。守りとしては頼もしいのですが、
+                  <strong>キングは前に逃げられません</strong>。</p>
+                  <p>そこへルークやクイーンが<strong>いちばん奥の段（バックランク）</strong>から王手をかけると、それだけで詰みです。
+                  これがバックランクメイト。実戦でいちばんよく出る詰みの型です。</p>
+                  <p>見分け方は2つ。<strong>①キングが最後の段にいて、前のポーンが動いていない。②その段を守る駒がいない。</strong></p>`,
+                board: { position: { g8: 'k', f7: 'p', g7: 'p', h7: 'p', e8: 'R' }, marks: { e8: 'sel', g8: 'ng' } },
+              },
+              {
+                type: 'move', side: 'w', goal: 'mate',
+                board: { g1: 'K', e1: 'R', g8: 'k', f7: 'p', g7: 'p', h7: 'p', a2: 'P', b2: 'P' },
+                prompt: '1手でチェックメイトにしてください。',
+                hint: '黒のキングの前には、自分のポーンが3枚。8段目を守る駒はいますか。',
+                why: 'Re8#。キングの前のポーンが、そのまま逃げ道をふさいでいます。これがバックランクメイトです。',
+              },
+              {
+                type: 'move', side: 'w', goal: 'mate',
+                board: { g1: 'K', d1: 'R', d2: 'R', g8: 'k', d8: 'r', f7: 'p', g7: 'p', h7: 'p', f2: 'P', g2: 'P', h2: 'P' },
+                prompt: '1手でチェックメイトにしてください。今度は8段目に黒のルークがいます。',
+                hint: '8段目を守っているのは d8 のルーク1枚だけ。そのルークを取ってしまえば？',
+                why: 'Rxd8#。守りの駒が1枚なら、2枚で攻めれば取りきれます。後ろのルークが支えているので、取り返せません。',
+              },
+              {
+                type: 'move', side: 'w', goal: 'mate',
+                board: { g1: 'K', e1: 'R', e2: 'Q', g8: 'k', e8: 'r', f7: 'p', g7: 'p', h7: 'p', f2: 'P', g2: 'P', h2: 'P' },
+                prompt: 'もう1問。1手でチェックメイトにしてください。',
+                hint: 'e列にクイーンとルークが縦に並んでいます。',
+                why: 'Qxe8#。クイーンとルークを縦に重ねる（バッテリー）と、守りの駒を取ったあとも後ろが支えます。',
+              },
+            ],
+          },
+          {
+            id: 'chess.pat-smother', game: 'chess', title: '窒息詰め',
+            desc: '自分の駒に囲まれて動けない',
+            steps: [
+              {
+                type: 'teach', title: 'ナイトだけの詰み',
+                body: `<p>キングが隅にいて、まわりを<strong>自分の駒</strong>がぎっしり囲んでいる。
+                  そこへナイトが王手をかけると、ナイトは飛び越えてくるので間に駒を入れられず、キングは動けません。
+                  これが<strong>窒息詰め（スマザードメイト）</strong>です。</p>
+                  <p>見分け方：<strong>隅のキングのまわりに、逃げるマスが1つもない</strong>。そのとき、ナイトで届くマスを探します。</p>`,
+                board: { position: { h8: 'k', g8: 'r', g7: 'p', h7: 'p', f7: 'N' }, marks: { f7: 'sel', h8: 'ng' } },
+              },
+              {
+                type: 'move', side: 'w', goal: 'mate',
+                board: { g1: 'K', e5: 'N', h8: 'k', g8: 'r', g7: 'p', h7: 'p', a2: 'P' },
+                prompt: '1手でチェックメイトにしてください。',
+                hint: 'h8のキングのまわりは、全部黒の駒です。ナイトで王手できるマスは？',
+                why: 'Nf7#。キングは自分の駒に囲まれ、ナイトの王手は間に駒を入れて防げません。',
+              },
+              {
+                type: 'move', side: 'w', goal: 'mate',
+                board: { b1: 'K', d5: 'N', a8: 'k', b8: 'r', a7: 'p', b7: 'p', h2: 'P' },
+                prompt: '反対の隅でも同じです。1手でチェックメイトにしてください。',
+                hint: 'a8のキングに、ナイトが届くマスは c7 と b6。どちらが空いていて、取られませんか。',
+                why: 'Nc7#。左右が変わっても型は同じです。',
+              },
+              {
+                type: 'mateIn', moves: 3, side: 'w', coords: true,
+                board: { g1: 'K', h6: 'N', c4: 'Q', h8: 'k', f8: 'r', a8: 'r', g7: 'p', h7: 'p', f2: 'P', g2: 'P', h2: 'P' },
+                prompt: '有名な型です。<strong>3手</strong>で詰ませてください。',
+                hint: 'いまは g8 が空いているので、キングに逃げ道があります。そこを「わざと」黒の駒で埋めさせるには？',
+                why: 'Qg8+! Rxg8 のあと Nf7#。クイーンを捨てて、黒のルークに逃げ道をふさがせました。フィリドールの遺産と呼ばれる型です。',
+              },
+            ],
+          },
+          {
+            id: 'chess.pat-rooks', game: 'chess', title: '2枚のルークの階段',
+            desc: '1段ずつ押して、端で仕留める',
+            steps: [
+              {
+                type: 'teach', title: '1枚が段をふさぎ、もう1枚が王手',
+                body: `<p>ルーク（またはクイーン）が2枚あれば、自分のキングの助けはいりません。
+                  <strong>1枚が段をふさぎ、もう1枚がその先の段で王手</strong>。これを交互にくり返すと、
+                  キングは1段ずつ端へ押し出され、最後の段で詰みます。</p>
+                  <p>階段を上るように見えるので、「階段詰め」や「芝刈り機」と呼ばれます。</p>`,
+                board: { position: { h8: 'k', a7: 'R', b8: 'R' }, marks: { a7: 'hint', b8: 'sel', h8: 'ng' } },
+              },
+              {
+                type: 'move', side: 'w', goal: 'mate',
+                board: { c3: 'K', a7: 'R', b1: 'R', h8: 'k' },
+                prompt: '1手でチェックメイトにしてください。',
+                hint: 'a7のルークが7段目をふさいでいます。もう1枚で8段目から王手を。',
+                why: 'Rb8#。7段目はa7のルーク、8段目はb8のルーク。キングの行き場がなくなりました。',
+              },
+              {
+                type: 'mateIn', moves: 3, side: 'w', coords: true,
+                board: { c1: 'K', a6: 'R', b5: 'R', e7: 'k' },
+                prompt: '階段の2段分です。<strong>3手</strong>で詰ませてください。',
+                hint: 'いま6段目はa6のルークがふさいでいます。もう1枚で7段目から王手をかけ、キングを8段目へ押し出します。',
+                why: 'Rb7+ でキングは8段目へ。次にa6のルークを8段目に上げて（Ra8#）詰み。2枚が交互に1段ずつ進みます。',
+              },
+            ],
+          },
+          {
+            id: 'chess.pat-support', game: 'chess', title: 'キングで支える詰み',
+            desc: 'クイーンを自分のキングで守る',
+            steps: [
+              {
+                type: 'teach', title: 'クイーンを相手のキングの隣へ',
+                body: `<p>クイーンを<strong>相手キングのすぐ隣</strong>に置いて王手。ふつうなら取られますが、
+                  <strong>自分のキングがそのクイーンを守っていれば</strong>取れません。</p>
+                  <p>クイーンは周りのマスをほとんど押さえるので、キングが端にいればこれで詰みです。
+                  終盤でクイーンが残ったら、まず<strong>自分のキングを近づける</strong>のが合言葉です。</p>`,
+                board: { position: { e8: 'k', e6: 'K', e7: 'Q' }, marks: { e7: 'sel', e6: 'hint', e8: 'ng' } },
+              },
+              {
+                type: 'move', side: 'w', goal: 'mate',
+                board: { e6: 'K', h4: 'Q', e8: 'k', a2: 'P' },
+                prompt: '1手でチェックメイトにしてください。',
+                hint: 'e6の白キングが守っているマスに、クイーンを入れます。',
+                why: 'Qe7#（Qh8# も詰み）。キングが守るマスにクイーンを入れれば、相手は取れません。',
+              },
+              {
+                type: 'move', side: 'w', goal: 'mate',
+                board: { b6: 'K', f7: 'Q', a8: 'k', h8: 'r' },
+                prompt: '1手でチェックメイトにしてください。8段目は黒のルークが守っています。',
+                hint: '8段目からの王手は、ルークに取られます。自分のキングが守っているマスはどこですか。',
+                why: 'Qb7#（Qa7# も詰み）。8段目がだめなら、キングが支える隣のマスから。',
+              },
+            ],
+          },
+          {
+            id: 'chess.pat-minor', game: 'chess', title: 'ナイトやビショップと組む詰み',
+            desc: 'アラビアンメイトとボーデンの詰み',
+            steps: [
+              {
+                type: 'teach', title: 'ルーク＋ナイト（アラビアンメイト）',
+                body: `<p>隅のキングに、ルークが<strong>すぐ隣</strong>から王手。ルークを守るのは斜め向こうのナイト。
+                  そのナイトは、キングのもう1つの逃げ道も同時に押さえています。</p>
+                  <p>ナイトは「角の2マス手前の斜め」（f6 など）に置くと、隅の2マスを両方押さえられます。</p>`,
+                board: { position: { h8: 'k', h7: 'R', f6: 'N' }, marks: { h7: 'sel', f6: 'hint', h8: 'ng' } },
+              },
+              {
+                type: 'move', side: 'w', goal: 'mate',
+                board: { g1: 'K', f6: 'N', b7: 'R', h8: 'k', a7: 'p' },
+                prompt: '1手でチェックメイトにしてください。',
+                hint: 'f6のナイトが守っているマスは、g8 と h7 です。',
+                why: 'Rh7#。ルークはナイトに守られ、g8もナイトが押さえています。',
+              },
+              {
+                type: 'teach', title: 'ビショップ2枚の交差（ボーデンの詰み）',
+                body: `<p>ビショップ2枚が<strong>斜めに交差</strong>して、キングの逃げ道を×の形でふさぐ詰みです。</p>
+                  <p>相手のキングの横に<strong>自分の駒（ルークやナイト）</strong>がいて、逃げ道が少ないときに起こります。</p>`,
+                board: { position: { c8: 'k', d8: 'r', d7: 'n', a6: 'B', f4: 'B' }, marks: { a6: 'sel', f4: 'hint', c8: 'ng' } },
+              },
+              {
+                type: 'move', side: 'w', goal: 'mate',
+                board: { c1: 'K', e2: 'B', f4: 'B', c8: 'k', d8: 'r', d7: 'n', a7: 'p', h7: 'p' },
+                prompt: '1手でチェックメイトにしてください。',
+                hint: 'f4のビショップが b8 と c7 を押さえています。もう1枚のビショップで王手を。',
+                why: 'Ba6#。2枚のビショップが×の形でキングを閉じ込めました。d7とd8は黒自身の駒でふさがっています。',
+              },
+            ],
+          },
+          {
+            id: 'chess.pat-drill', game: 'chess', title: '型の総復習',
+            desc: '型の名前は伏せて出題',
+            steps: [
+              {
+                type: 'teach', title: '型を見抜く',
+                body: `<p>ここからは型の名前を伏せて出題します。まず<strong>キングの逃げ道</strong>を数え、
+                  「どの型に近いか」を思い出してから指してください。</p>
+                  <p>左右を入れ替えた問題も混ざっています。形が同じなら、同じ手が効きます。</p>`,
+              },
+              ...drill([
+                [{ g1: 'K', e1: 'R', g8: 'k', f7: 'p', g7: 'p', h7: 'p', a2: 'P', b2: 'P' }, 'バックランクメイト'],
+                [{ g1: 'K', e5: 'N', h8: 'k', g8: 'r', g7: 'p', h7: 'p', a2: 'P' }, '窒息詰め'],
+                [{ c3: 'K', a7: 'R', b1: 'R', h8: 'k' }, '2枚のルークの階段'],
+                [{ b6: 'K', f7: 'Q', a8: 'k', h8: 'r' }, 'キングで支える詰み'],
+                [{ g1: 'K', f6: 'N', b7: 'R', h8: 'k', a7: 'p' }, 'アラビアンメイト'],
+                [{ c1: 'K', e2: 'B', f4: 'B', c8: 'k', d8: 'r', d7: 'n', a7: 'p', h7: 'p' }, 'ボーデンの詰み'],
+                [{ g1: 'K', d1: 'R', d2: 'R', g8: 'k', d8: 'r', f7: 'p', g7: 'p', h7: 'p', f2: 'P', g2: 'P', h2: 'P' }, 'バックランクメイト（守りの駒を取る）'],
+              ]),
+            ],
+          },
+        ],
+      },
+      {
+        title: '七　タクティクスの型',
+        lessons: [
+          {
+            id: 'chess.tac-fork', game: 'chess', title: '両取り（フォーク）',
+            desc: '1手で2つを狙う',
+            steps: [
+              {
+                type: 'teach', title: '見つけ方：相手の「浮いた駒」を2つ探す',
+                body: `<p>フォークを探すときは、まず相手の<strong>守られていない駒</strong>と<strong>キング</strong>に印をつけます。
+                  次に、その2つに<strong>同時に届くマス</strong>を探します。</p>
+                  <p>ナイトは形が特殊なので、とくに見落とされやすい武器です。キングへの王手と組み合わせると、
+                  相手は王手をよけるしかなく、もう1枚が取れます。</p>`,
+                board: { position: { g8: 'k', c6: 'q', e7: 'N' }, marks: { e7: 'sel', g8: 'ng', c6: 'ng' } },
+              },
+              ...TAC.fork.map((p) => tacStep(p)),
+            ],
+          },
+          {
+            id: 'chess.tac-pin', game: 'chess', title: 'ピンを使う',
+            desc: '動けない駒を攻める',
+            steps: [
+              {
+                type: 'teach', title: 'ピンは「かける」より「使う」',
+                body: `<p>ピンされた駒は動けません（キングの前なら、動かすこと自体が反則です）。
+                  だから<strong>ピンされた駒には、攻撃を足せば取れます</strong>。歩で攻めるのがいちばん効きます。</p>
+                  <p>もう1つは、<strong>キングの前にいる大きい駒をピンする</strong>形。クイーンがピンされれば、安い駒と交換させられます。</p>`,
+                board: { position: { e8: 'k', e6: 'n', f7: 'p', e1: 'R', d5: 'P' }, marks: { e6: 'ng', e1: 'hint', d5: 'sel' } },
+              },
+              ...TAC.pin.map((p) => tacStep(p)),
+            ],
+          },
+          {
+            id: 'chess.tac-skewer', game: 'chess', title: '串刺し（スキュア）',
+            desc: 'キングの後ろの駒を取る',
+            steps: [
+              {
+                type: 'teach', title: '王手して、どいた後ろを取る',
+                body: `<p>キングと、守られていない駒が<strong>同じ線（縦・横・斜め）</strong>に並んでいたら、スキュアのチャンスです。</p>
+                  <p>その線の上から王手をかけると、キングはよけるしかなく、後ろの駒が取れます。
+                  王手をかける駒が<strong>取られない場所</strong>かどうかだけ、先に確かめます。</p>`,
+                board: { position: { c6: 'k', a8: 'r', e4: 'B' }, marks: { e4: 'sel', c6: 'ng', a8: 'ng' } },
+              },
+              ...TAC.skewer.map((p) => tacStep(p)),
+            ],
+          },
+          {
+            id: 'chess.tac-disc', game: 'chess', title: 'ディスカバード',
+            desc: 'どいた駒と、後ろの駒の2つで攻める',
+            steps: [
+              {
+                type: 'teach', title: '前の駒が動くと、後ろの駒が利く',
+                body: `<p>自分のルークやビショップの前に自分の駒がいて、その先に相手のキングがあるとき、
+                  前の駒を動かすだけで王手になります（ディスカバードチェック）。</p>
+                  <p>このとき、<strong>動かした駒はどこへ行ってもいい</strong>。相手は王手をよけるしかないので、
+                  動かした駒で大きな駒を取ったり狙ったりできます。</p>`,
+                board: { position: { e8: 'k', e4: 'B', e1: 'R', b7: 'q' }, marks: { e4: 'sel', e1: 'hint', b7: 'ng', e8: 'ng' } },
+              },
+              ...TAC.disc.map((p) => tacStep(p)),
+            ],
+          },
+          {
+            id: 'chess.tac-drill', game: 'chess', title: 'タクティクス総復習',
+            desc: '型の名前は伏せて出題',
+            steps: [
+              {
+                type: 'teach', title: '型を見抜く',
+                body: `<p>ここからは、どの型かを伏せて出題します。毎回この順で探してください。</p>
+                  <p><strong>1. 王手はあるか。</strong><br><strong>2. 守られていない相手の駒はどれか。</strong><br>
+                  <strong>3. キングと同じ線に並んでいる駒はないか。</strong></p>
+                  <p>左右を入れ替えた問題も混ざっています。</p>`,
+              },
+              ...tacDrill(),
+            ],
+          },
+        ],
+      },
+      {
+        title: '八　もっと深いタクティクス',
+        lessons: [
+          {
+            id: 'chess.tac-double', game: 'chess', title: '両王手',
+            desc: '王手が2つ同時にかかる',
+            steps: [
+              {
+                type: 'teach', title: '両王手は、キングが動くしかない',
+                body: `<p>ディスカバードチェックのとき、<strong>動いた駒自身も王手</strong>をかけていると、王手が2つ同時にかかります。これが<strong>両王手</strong>です。</p>
+                  <p>2つの王手を1手で止めることはできないので、<strong>相手はキングを動かすしかありません</strong>。
+                  王手している駒を取ることも、間に駒を入れることもできません。だから両王手をかけた駒は、取られる場所にいても平気です。</p>`,
+                board: { position: { e8: 'k', e1: 'R', f6: 'N', d7: 'q' }, marks: { f6: 'sel', e1: 'hint', e8: 'ng' } },
+              },
+              tacStep([{ g1: 'K', e1: 'R', e4: 'N', e8: 'k', d7: 'q', g7: 'p', h7: 'p', a7: 'p', f2: 'P', g2: 'P', h2: 'P' },
+                ['e4f6'], '両王手',
+                'ナイトが e4 からどけば、e1のルークの王手になります。ナイト自身も王手をかけられるマスは？',
+                'Nf6++。ルークとナイトの両王手なので、g7の歩はナイトを取れません。キングが動いたあと、d7のクイーンを取ります。']),
+              tacStep([{ g1: 'K', e1: 'R', e2: 'B', e8: 'k', d8: 'q', f8: 'b', f7: 'p', g7: 'p', h7: 'p', a7: 'p', f2: 'P', g2: 'P', h2: 'P' },
+                ['e2b5'], '両王手で詰み',
+                'e2のビショップがどくと、e1のルークが王手。ビショップ自身も王手をかけられる場所は？',
+                'Bb5#。ビショップとルークの両王手。キングの横は自分の駒でふさがっていて、両王手は間に駒を入れても防げません。']),
+            ],
+          },
+          {
+            id: 'chess.tac-remove', game: 'chess', title: '守りの駒をどかす',
+            desc: '守っている駒を取る・引きはがす',
+            steps: [
+              {
+                type: 'teach', title: '「誰が守っているか」を先に見る',
+                body: `<p>取りたい駒が守られているときは、あきらめる前に<strong>守っている駒</strong>を見ます。</p>
+                  <p><strong>守っている駒を取る</strong>か、王手などで<strong>守っている駒を別の場所へ引きはがす</strong>と、
+                  守りのなくなった駒が取れるようになります。</p>`,
+                board: { position: { d5: 'b', f6: 'n', g5: 'B', d1: 'R' }, marks: { f6: 'ng', d5: 'hint', g5: 'sel' } },
+              },
+              tacStep([{ g1: 'K', d1: 'R', g5: 'B', g8: 'k', f6: 'n', d5: 'b', g7: 'p', h7: 'p', f7: 'p', f2: 'P', g2: 'P', h2: 'P' },
+                ['g5f6'], '守りの駒を取る',
+                'd5のビショップは d1のルークに狙われていますが、f6のナイトが守っています。',
+                'Bxf6。ナイトを取れば、d5のビショップを守る駒がいなくなります。取り返されても、次に Rxd5 で1枚得をします。']),
+              {
+                type: 'combo', side: 'w', moves: 2, gain: 5,
+                board: { g1: 'K', d1: 'Q', c4: 'B', e8: 'k', d8: 'q', f7: 'p', g7: 'p', h7: 'p', a7: 'p', e7: 'n', f2: 'P', g2: 'P', h2: 'P' },
+                prompt: '<strong>2手</strong>で駒得してください（自分・相手・自分）。d8のクイーンを守っているのは、e8のキングだけです。',
+                hint: 'キングを、王手で d8 から引きはがします。f7の歩は、ビショップで取れます。',
+                why: 'Bxf7+ でキングを王手。キングが f7 で取っても、f8 へ逃げても、d8のクイーンの守りがなくなり、Qxd8 で取れます。',
+              },
+            ],
+          },
+          {
+            id: 'chess.tac-combo', game: 'chess', title: '組み合わせ（2手で決める）',
+            desc: '1手目で形を作り、2手目で取る',
+            steps: [
+              {
+                type: 'teach', title: '1手目は「準備」',
+                body: `<p>強い人の手は、1手だけでは駒得になっていないことがよくあります。
+                  <strong>1手目で形を作り（交換・ピン・王手）、2手目で両取りや串刺しを決める</strong>。これが組み合わせです。</p>
+                  <p>ここでは、自分・相手・自分の3手を読みます。相手はいちばん損の少ない手で応じてきます。</p>`,
+              },
+              {
+                type: 'combo', side: 'w', moves: 2, gain: 5,
+                board: { g1: 'K', d1: 'Q', e5: 'N', e8: 'k', d8: 'q', h8: 'r', f7: 'p', g7: 'p', a7: 'p', f2: 'P', g2: 'P', h2: 'P' },
+                prompt: '<strong>2手</strong>で駒得してください。クイーンどうしが向かい合っています。',
+                hint: 'クイーンを交換すると、黒のキングは d8 へ。そのキングと h8のルークに、ナイトが同時に届くマスは？',
+                why: 'Qxd8+ Kxd8 のあと Nxf7+。キングと h8のルークの両取りで、ルークが取れます。交換で、キングを両取りの場所へ呼び込みました。',
+              },
+              {
+                type: 'combo', side: 'w', moves: 2, gain: 2,
+                board: { g1: 'K', f1: 'B', d4: 'P', e3: 'P', e8: 'k', c6: 'n', a7: 'p', f7: 'p', g7: 'p', h7: 'p', f2: 'P', g2: 'P', h2: 'P' },
+                prompt: '<strong>2手</strong>で駒得してください。',
+                hint: 'c6のナイトと e8のキングが、斜めに並んでいます。ピンしてから、安い駒で攻めます。',
+                why: 'Bb5 でナイトをキングにピン。次に d5 で攻めると、ナイトは動けずに取られます。',
+              },
+            ],
+          },
+        ],
+      },
     ],
   };
 
@@ -7223,6 +7849,101 @@ const NS_DSHOGI = (() => {
   // 方針: 駒を1枚ずつ。成りと持ち駒は独立した章で扱う（ここが最大の壁）。
   // 3×4のミニ将棋で「持ち駒つきの完結した1局」を早めに体験させる。
 
+
+  // ── 型の総復習用：左右反転（筋 f → 10−f）した問題も作り、決まった順に混ぜる
+  const mirrorShogi = (b) => Object.fromEntries(Object.entries(b).map(([sq, p]) => [`${10 - Number(sq[0])}${sq[1]}`, p]));
+  function drill(list) {
+    const steps = list.map(([board, hand, name], i) => {
+      const b = i % 2 ? mirrorShogi(board) : board;
+      // 自玉（9九）は反転すると1九になる。どちらでも詰みには関係しない位置
+      return {
+        type: 'move', shape: BIG, goal: 'mate',
+        state: { board: { ...b, [i % 2 ? '19' : '99']: 'K' }, hands: { b: { ...hand }, w: {} }, turn: 'b' },
+        prompt: '1手で詰ませてください。',
+        hint: '玉の逃げ道を数えてから、どの型に近いかを考えます。',
+        why: `型は<strong>${name}</strong>でした。`,
+      };
+    });
+    const order = [2, 5, 0, 4, 6, 1, 3];
+    return order.filter((n) => n < steps.length).map((n) => steps[n]);
+  }
+
+  // ── 5手詰め。すべてエンジンで「5手で詰み・3手以内では詰まない・初手は1つだけ」を確かめてある
+  //    [盤, 持ち駒, 問題文, ヒント, 解説（手順は一例）]
+  const TSUME5 = [
+    [{ '13': 'k', '26': 'L' }, { G: 2 },
+      '5手で詰ませてください。持ち駒は金2枚。',
+      '2六の香が2筋を下から支えています。金を玉の斜め下から打ち、押し上げていきます。',
+      '2四金 1二玉 2三金（金を上げる） 1一玉 2二金まで。香に支えられた金を、1段ずつ押し上げました。'],
+    [{ '22': 'k', '25': 'N' }, { G: 1, S: 1 },
+      '5手で詰ませてください。持ち駒は金と銀。',
+      '2五の桂は、1三と3三に利いています。桂が支えるマスに、まず金を打ちます。',
+      '3三金 1二玉 2三銀 1一玉 2二銀成まで。桂の支えで金を打ち、銀で追い込んで、最後は成って頭から仕留めます。'],
+    [{ '13': 'k', '26': 'S' }, { R: 1, G: 1 },
+      '5手で詰ませてください。持ち駒は飛と金。',
+      '飛車は玉から離して打つのが基本です。玉と同じ段で、遠いところから。',
+      '5三飛 1二玉 2三金 1一玉 5一飛成まで。離して打った飛車が、最後に1段目へ回って仕留めます。'],
+    [{ '14': '+R', '31': 'k' }, { G: 2 },
+      '5手で詰ませてください。竜と、持ち駒の金2枚を使います。',
+      '竜を玉と同じ筋へ動かして、縦から王手をかけます。',
+      '3四竜 4二玉 4三金 4一玉 5二金まで。竜で縦の逃げ道を消し、金2枚で横から追いました。'],
+    [{ '13': '+R', '21': 'k', '33': 's' }, { G: 1, S: 1, P: 1 },
+      '5手で詰ませてください。持ち駒は金・銀・歩。',
+      '竜を玉の真下へ寄せて王手。相手が駒を間に入れてきたら、その駒を取れる形を作ります。',
+      '2三竜 2二銀（合駒） 3二金 1一玉 2二竜まで。合駒で止めた銀を、最後に竜で取って詰み。'],
+    [{ '11': 'k', '14': 'n', '34': '+R' }, { G: 1, N: 1 },
+      '5手で詰ませてください。竜と、持ち駒の金・桂を使います。',
+      '竜を1段目へ回して、横から王手します。',
+      '3一竜 1二玉 3二竜 1三玉 2三金まで。竜で横から追い、玉を上へ逃がしてから金で仕留めました。'],
+  ];
+
+  // ── 7手詰め：エンジンで「7手で詰み・5手以内では詰まない・初手は1つだけ」を確かめてある（解説の手順は一例）
+  const TSUME7 = [
+    [{ '15': 'B', '22': 'k' }, { G: 2 },
+      '7手で詰ませてください。持ち駒は金2枚。',
+      '1五の角が、3三まで斜めに利いています。角に支えられた場所から金を打ちます。',
+      '3三金 1三玉 2四金 1二玉 2三金 1一玉 2二金まで。2枚の金を、角と互いの支えで押し上げていきました。'],
+    [{ '31': 'k', '51': '+B' }, { R: 1, S: 1 },
+      '7手で詰ませてください。馬と、持ち駒の飛・銀を使います。',
+      '飛車は離して打つのが基本。玉のすぐ近くでも、馬が支えるなら打てます。',
+      '3三飛 2二玉 1三銀 2一玉 2三飛（飛車を寄る） 3二玉 2二銀成まで。'],
+    [{ '11': 'k', '34': 's' }, { R: 1, B: 1 },
+      '7手で詰ませてください。持ち駒は飛と角。',
+      '大駒2枚は、どちらも遠くから打ちます。まず角で斜めから王手を。',
+      '3三角 1二玉 9二飛（遠くから） 1三玉 2二飛成 1四玉 2四竜まで。'],
+    [{ '41': 'k', '54': 'L' }, { R: 1, B: 1 },
+      '7手で詰ませてください。持ち駒は飛と角。',
+      '角を、玉から離れた斜めの位置に打ちます。',
+      '2三角 4二玉 3二飛 4三玉 3四飛成 4二玉 3二角成まで。飛車も角も、最後は成って仕留めました。'],
+    [{ '31': 'k', '34': 'G', '53': 'g' }, { R: 1, G: 1 },
+      '7手で詰ませてください。持ち駒は飛と金。',
+      '1段目に、遠くから飛車を打ちます。',
+      '7一飛 4二玉 3三金 5二玉 7二飛成 5一玉 4二金まで。'],
+    [{ '21': 'k', '33': 'L', '41': 'S' }, { R: 1, S: 1 },
+      '7手で詰ませてください。盤上の銀と、持ち駒の飛・銀を使います。',
+      '4一の銀を動かして王手をかけるところから始めます。',
+      '3二銀 2二玉 2三飛 1二玉 2一飛成 1三玉 2三竜まで。'],
+  ];
+
+  // ── 必至：王手でない1手目で、相手のどの応手にも1手詰めが残る（3手詰めはない）ことを確かめてある
+  const HISSHI = [
+    [{ '51': 'k', '72': 'S' }, { G: 2 },
+      '<strong>必至</strong>をかけてください。持ち駒は金2枚。相手が受けたあと、1手で詰ませます。',
+      'いきなり王手をかけると逃げられます。玉の前に金を置いて、逃げ道と受けを同時に消します。',
+      '5三金。次に5二金の頭金が防げません。玉が4一へ逃げても、4二金で詰みます。'],
+    [{ '41': 'k', '43': 'p', '44': 'L' }, { G: 1, P: 1 },
+      '<strong>必至</strong>をかけてください。',
+      '4四の香で、目の前の歩を取れます。成るとどうなるでしょう。',
+      '4三香成（成香は金と同じ動き）。玉がどちらへ逃げても、金を打って詰みます（5一なら5二金、3一なら3二金）。'],
+    [{ '31': 'k', '23': 'P', '21': 'B', '43': 's' }, { B: 1 },
+      '<strong>必至</strong>をかけてください。',
+      '2一の角で、4三の銀が取れます。',
+      '4三角成（銀を取る）。玉は4一へ逃げるしかなく、取ったばかりの銀を4二に打って詰みます。'],
+    [{ '31': 'k', '11': 'l', '13': 'l', '24': 'B' }, { N: 1, G: 1 },
+      '<strong>必至</strong>をかけてください。持ち駒は桂と金。',
+      '2四の角を成り込んで、玉の逃げ道をまとめて押さえます。',
+      '3三角成。次に3二金（または2二金）の詰みが防げません。'],
+  ];
 
   const shogi = {
     id: 'shogi',
@@ -8199,6 +8920,261 @@ const NS_DSHOGI = (() => {
                 type: 'play', variant: 'big', goals: ['shogi.castle', 'shogi.attack'],
                 prompt: '本将棋で1局。囲う→攻める→詰ます、の流れを意識してください。',
               },
+            ],
+          },
+        ],
+      },
+      {
+        title: '七　詰みの型',
+        lessons: [
+          {
+            id: 'shogi.pat-atama', game: 'shogi', title: '頭金',
+            desc: '玉の頭に金を打つ、いちばんの基本',
+            steps: [
+              {
+                type: 'teach', title: '玉の真正面に、支えのある金',
+                body: `<p>玉の<strong>すぐ前（頭）に金を打つ</strong>。金は前・横・斜め前に利くので、
+                  玉の前と横の逃げ道をまとめて押さえます。</p>
+                  <p>条件は1つ、<strong>その金が支えられていること</strong>（取られないこと）。
+                  歩・桂・銀・大駒など、何が支えてもかまいません。</p>`,
+                board: { shape: BIG, position: { '51': 'k', '52': 'G', '53': 'P' }, marks: { '52': 'sel', '53': 'hint', '51': 'ng' }, coords: true },
+              },
+              {
+                type: 'move', shape: BIG, goal: 'mate',
+                state: { board: { '51': 'k', '53': 'P', '99': 'K' }, hands: { b: { G: 1 }, w: {} }, turn: 'b' },
+                prompt: '1手で詰ませてください。',
+                hint: '5三の歩が、その1つ前のマスを支えています。',
+                why: '5二金で詰み。歩が金を支えているので、玉は金を取れません。',
+              },
+              {
+                type: 'move', shape: BIG, goal: 'mate',
+                state: { board: { '21': 'k', '32': 'P', '14': 'N', '99': 'K' }, hands: { b: { G: 1 }, w: {} }, turn: 'b' },
+                prompt: 'もう1問。支えているのは歩ではありません。',
+                hint: '1四の桂は、2二と0二（盤の外）に利いています。',
+                why: '2二金で詰み。桂が金を支え、3二の歩が玉の逃げ道（3一）をふさいでいます。',
+              },
+            ],
+          },
+          {
+            id: 'shogi.pat-shiri', game: 'shogi', title: '尻金',
+            desc: '玉の後ろに金を打つ',
+            steps: [
+              {
+                type: 'teach', title: '下がれない場所へ追い込む',
+                body: `<p>玉が2段目にいるとき、<strong>玉の後ろ（1段目）に金を打つ</strong>形です。
+                  金は1段目の横と、玉のいる2段目を押さえます。</p>
+                  <p>前（3段目）への逃げ道は、竜や他の駒で先にふさいでおくのが条件です。
+                  「上からは頭金、後ろからは尻金」と覚えてください。</p>`,
+                board: { shape: BIG, position: { '42': 'k', '41': 'G', '31': 'G', '63': '+R' }, marks: { '41': 'sel', '63': 'hint', '42': 'ng' }, coords: true },
+              },
+              {
+                type: 'move', shape: BIG, goal: 'mate',
+                state: { board: { '42': 'k', '31': 'G', '63': '+R', '99': 'K' }, hands: { b: { G: 1 }, w: {} }, turn: 'b' },
+                prompt: '1手で詰ませてください。',
+                hint: '6三の竜が3段目をまるごと押さえています。残る逃げ道は1段目と2段目です。',
+                why: '4一金で詰み。竜が3段目を、3一の金と打った金が1〜2段目をふさぎました。',
+              },
+              {
+                type: 'move', shape: BIG, goal: 'mate',
+                state: { board: { '42': 'k', '32': 'g', '13': '+R', '74': 'B', '99': 'K' }, hands: { b: { G: 1 }, w: {} }, turn: 'b' },
+                prompt: 'もう1問。1手詰めです。',
+                hint: '竜は3段目を、角は斜めを見ています。玉の後ろはどうでしょう。',
+                why: '4一金で詰み。前は竜と角、後ろは金。玉の味方の金（3二）は、自分の逃げ道をふさいでいます。',
+              },
+            ],
+          },
+          {
+            id: 'shogi.pat-hara', game: 'shogi', title: '腹金',
+            desc: '玉の横に金を打つ',
+            steps: [
+              {
+                type: 'teach', title: '横から寄せる',
+                body: `<p>玉の<strong>横（腹）に金を打つ</strong>形です。玉が盤の端にいると、横からの金1枚で
+                  前後の逃げ道まで押さえられます。</p>
+                  <p>ここでも<strong>支え</strong>が必要です。竜や角が、金を打つマスに利いているかを先に見ます。</p>`,
+                board: { shape: BIG, position: { '12': 'k', '22': 'G', '33': '+R' }, marks: { '22': 'sel', '33': 'hint', '12': 'ng' }, coords: true },
+              },
+              {
+                type: 'move', shape: BIG, goal: 'mate',
+                state: { board: { '12': 'k', '33': '+R', '99': 'K' }, hands: { b: { G: 1 }, w: {} }, turn: 'b' },
+                prompt: '1手で詰ませてください。',
+                hint: '3三の竜は、2二にも斜め1マスで利いています。',
+                why: '2二金で詰み。竜が金を支え、1三・2三も竜が押さえています。',
+              },
+              {
+                type: 'move', shape: BIG, goal: 'mate',
+                state: { board: { '12': 'k', '13': 'g', '33': 'B', '99': 'K' }, hands: { b: { G: 1 }, w: {} }, turn: 'b' },
+                prompt: 'もう1問。1手詰めです。',
+                hint: '3三の角は、2二を通って1一まで利いています。',
+                why: '2二金で詰み。角が金を支えています。1三の相手の金は、玉の逃げ道をふさいでいるだけです。',
+              },
+            ],
+          },
+          {
+            id: 'shogi.pat-ryu', game: 'shogi', title: '一間竜',
+            desc: '1マスあけて竜で王手',
+            steps: [
+              {
+                type: 'teach', title: '竜は1マス離して使う',
+                body: `<p>竜（成った飛車）で王手をかけるとき、玉の<strong>すぐ隣ではなく、1マスあけて</strong>王手をかける形です。
+                  これを<strong>一間竜</strong>といいます。</p>
+                  <p>隣から王手すると玉に取られやすいのに対し、1マス離れていれば取られません。
+                  しかも竜は斜め1マスにも利くので、玉の斜め前の逃げ道も押さえます。</p>`,
+                board: { shape: BIG, position: { '51': 'k', '31': '+R', '53': 'G', '61': 'g' }, marks: { '31': 'sel', '41': 'hint', '51': 'ng' }, coords: true },
+              },
+              {
+                type: 'move', shape: BIG, goal: 'mate',
+                state: { board: { '51': 'k', '61': 'g', '53': 'G', '39': '+R', '99': 'K' }, hands: { b: {}, w: {} }, turn: 'b' },
+                prompt: '竜を動かして、1手で詰ませてください。',
+                hint: '3九の竜は、3筋をまっすぐ上がれます。玉と同じ段で、1マスあけた場所は？',
+                why: '3一竜で詰み（一間竜）。4一には竜の利き、4二には竜の斜めの利き、5二・6二は5三の金が押さえています。',
+              },
+            ],
+          },
+          {
+            id: 'shogi.pat-kei', game: 'shogi', title: '桂で仕留める',
+            desc: '飛び越える王手は防げない',
+            steps: [
+              {
+                type: 'teach', title: '桂の王手は合駒がきかない',
+                body: `<p>桂は駒を飛び越えるので、桂の王手は<strong>間に駒を入れて防ぐことができません</strong>。
+                  玉のまわりが駒で詰まっているほど、桂の出番です。</p>
+                  <p>桂を打つ場所は「玉の2段下で、1筋ずれたマス」。そこが取られないかを確かめて打ちます。</p>`,
+                board: { shape: BIG, position: { '11': 'k', '21': 'g', '23': 'N', '13': 'S' }, marks: { '23': 'sel', '11': 'ng' }, coords: true },
+              },
+              {
+                type: 'move', shape: BIG, goal: 'mate',
+                state: { board: { '11': 'k', '21': 'g', '13': 'S', '99': 'K' }, hands: { b: { N: 1 }, w: {} }, turn: 'b' },
+                prompt: '持ち駒の桂で、1手で詰ませてください。',
+                hint: '1一の玉に桂が届くのは、2三だけです。',
+                why: '2三桂で詰み。1二と2二は1三の銀が押さえ、2一は玉の味方の金でふさがっています。',
+              },
+              {
+                type: 'move', shape: BIG, goal: 'mate',
+                state: { board: { '21': 'k', '11': 'l', '31': 'p', '52': '+R', '99': 'K' }, hands: { b: { N: 1 }, w: {} }, turn: 'b' },
+                prompt: 'もう1問。桂で詰ませてください。',
+                hint: '2一の玉に桂が届くのは、1三と3三。竜が守っていないのはどちらの逃げ道でしょう。',
+                why: '3三桂で詰み。2段目は竜が押さえ、1一と3一は玉の味方の駒でふさがっています。',
+              },
+            ],
+          },
+          {
+            id: 'shogi.pat-3te', game: 'shogi', title: '型をつなぐ3手詰め',
+            desc: '1手目で追い、3手目で型にはめる',
+            steps: [
+              {
+                type: 'teach', title: '3手詰めは「型への道」',
+                body: `<p>3手詰めの多くは、<strong>1手目で玉を逃げ道の少ない場所へ動かし、3手目で頭金・腹金などの型で仕留める</strong>、という形です。</p>
+                  <p>だから解くときは、「最後にどの型で詰ませるか」を先に思い描き、そこから1手目を探します。</p>`,
+              },
+              {
+                type: 'mateIn', moves: 3, shape: BIG, coords: true,
+                state: { board: { '22': 'k', '45': 'B', '99': 'K' }, hands: { b: { G: 2 }, w: {} }, turn: 'b' },
+                prompt: '3手で詰ませてください。持ち駒は金2枚。',
+                hint: '4五の角が、2三まで利いています。まず頭金の形で王手を。',
+                why: '2三金と頭から王手。玉がどこへ逃げても、もう1枚の金で頭金（2二金・3二金）になります。',
+              },
+              {
+                type: 'mateIn', moves: 3, shape: BIG, coords: true,
+                state: { board: { '12': 'k', '32': 'G', '99': 'K' }, hands: { b: { R: 1, G: 1 }, w: {} }, turn: 'b' },
+                prompt: '3手で詰ませてください。持ち駒は飛と金。',
+                hint: '飛車を玉の横に打っても、3二の金が支えているので取られません。',
+                why: '2二飛と横から王手。1三へ逃げれば2四金、1一へ逃げれば2一金などで詰みます。',
+              },
+              {
+                type: 'mateIn', moves: 3, shape: BIG, coords: true,
+                state: { board: { '41': 'k', '54': '+R', '99': 'K' }, hands: { b: { G: 1, S: 1 }, w: {} }, turn: 'b' },
+                prompt: '3手で詰ませてください。竜と、持ち駒の金銀が使えます。',
+                hint: '一間竜を思い出してください。竜を玉と同じ筋の、1マスあけた場所へ。',
+                why: '4三竜（一間竜）で王手。5一へ逃げれば5二金、3一へ逃げれば3二金の頭金で詰みます。',
+              },
+            ],
+          },
+          {
+            id: 'shogi.pat-drill', game: 'shogi', title: '型の総復習',
+            desc: '型の名前は伏せて出題',
+            steps: [
+              {
+                type: 'teach', title: '型を見抜く',
+                body: `<p>ここからは型の名前を伏せて出題します。まず<strong>玉の逃げ道</strong>を数え、
+                  「頭金・尻金・腹金・一間竜・桂」のどれに近いかを考えてから指してください。</p>
+                  <p>左右を入れ替えた問題も混ざっています。</p>`,
+              },
+              ...drill([
+                [{ '51': 'k', '53': 'P' }, { G: 1 }, '頭金'],
+                [{ '42': 'k', '31': 'G', '63': '+R' }, { G: 1 }, '尻金'],
+                [{ '12': 'k', '33': '+R' }, { G: 1 }, '腹金'],
+                [{ '51': 'k', '61': 'g', '53': 'G', '39': '+R' }, {}, '一間竜'],
+                [{ '11': 'k', '21': 'g', '13': 'S' }, { N: 1 }, '桂の王手'],
+                [{ '21': 'k', '32': 'P', '14': 'N' }, { G: 1 }, '頭金（桂の支え）'],
+                [{ '12': 'k', '13': 'g', '33': 'B' }, { G: 1 }, '腹金（角の支え）'],
+              ]),
+            ],
+          },
+        ],
+      },
+      {
+        title: '八　5手詰め',
+        lessons: [
+          {
+            id: 'shogi.tsume5', game: 'shogi', title: '5手詰め',
+            desc: '3手先の型を思い描く',
+            steps: [
+              {
+                type: 'teach', title: '5手詰めの読み方',
+                body: `<p>5手詰めは「王手 → 逃げる → 王手 → 逃げる → 詰み」。自分の手は3回です。</p>
+                  <p>全部の変化を読む必要はありません。<strong>①最後にどの型（頭金・腹金・一間竜など）で詰ませるか</strong>を思い描き、
+                  <strong>②玉をその型の場所へ追い込む王手</strong>を探します。</p>
+                  <p>もう1つのコツは<strong>大駒は離して打つ</strong>。飛車や角は、玉から離れた場所から王手すると取られにくく、
+                  逃げ道も広く押さえられます。</p>
+                  <p>相手は、いちばん長く逃げられる手を選んできます。</p>`,
+              },
+              ...TSUME5.map(([board, hand, prompt, hint, why]) => ({
+                type: 'mateIn', moves: 5, shape: BIG, coords: true,
+                state: { board: { ...board, '99': 'K' }, hands: { b: hand, w: {} }, turn: 'b' },
+                prompt, hint, why,
+              })),
+            ],
+          },
+        ],
+      },
+      {
+        title: '九　7手詰めと必至',
+        lessons: [
+          {
+            id: 'shogi.tsume7', game: 'shogi', title: '7手詰め',
+            desc: '自分の手は4回',
+            steps: [
+              {
+                type: 'teach', title: '7手詰めは、型を2つつなぐ',
+                body: `<p>7手詰めは、自分の手が4回。長く見えますが、やることは5手詰めと同じです。
+                  <strong>最後の型を思い描き、そこへ玉を追い込む王手</strong>を探します。</p>
+                  <p>途中で<strong>大駒を成る</strong>、<strong>打った駒を捨てて玉を呼び込む</strong>手がよく出ます。
+                  相手は、いちばん長く逃げられる手を選んできます。</p>`,
+              },
+              ...TSUME7.map(([board, hand, prompt, hint, why]) => ({
+                type: 'mateIn', moves: 7, shape: BIG, coords: true,
+                state: { board: { ...board, '99': 'K' }, hands: { b: hand, w: {} }, turn: 'b' },
+                prompt, hint, why,
+              })),
+            ],
+          },
+          {
+            id: 'shogi.hisshi', game: 'shogi', title: '必至',
+            desc: '王手をかけずに、詰みを防げなくする',
+            steps: [
+              {
+                type: 'teach', title: '必至は「受けのない詰めろ」',
+                body: `<p>王手ではないのに、相手が<strong>どう受けても次に詰んでしまう</strong>状態を<strong>必至</strong>といいます。</p>
+                  <p>詰みが見えないときは、無理に王手を続けるより、必至をかけるほうが確実です。
+                  コツは、<strong>玉の逃げ道を先にふさぐ</strong>こと。王手をかけると玉が逃げ道を広げてしまうことがあります。</p>
+                  <p>ここでは、あなたの1手目は<strong>王手でなくてかまいません</strong>。相手が1手受けたあと、1手で詰ませます。</p>`,
+              },
+              ...HISSHI.map(([board, hand, prompt, hint, why]) => ({
+                type: 'mateIn', moves: 3, mustCheck: false, shape: BIG, coords: true,
+                state: { board: { ...board, '99': 'K' }, hands: { b: hand, w: {} }, turn: 'b' },
+                prompt, hint, why,
+              })),
             ],
           },
         ],
@@ -9242,6 +10218,200 @@ const NS_DMAHJONG = (() => {
               {
                 type: 'play4', rule: { naki: true },
                 prompt: '最後に1局。鳴きあり、コーチつきです。ここまでの全部を使ってください。',
+              },
+            ],
+          },
+        ],
+      },
+      {
+        title: '九　形の型',
+        lessons: [
+          {
+            id: 'mahjong.pat-tamen', game: 'mahjong', title: '多面待ちの型',
+            desc: '3面張・ノベタン・エントツ',
+            steps: [
+              {
+                type: 'teach', title: '待ちが2種類より多くなる形',
+                body: `<p>待ちの5つの形（両面・嵌張・辺張・双ポン・単騎）が<strong>重なる</strong>と、待ちが3種類以上に増えます。
+                  よく出るのは次の4つです。</p>
+                  <p><strong>3面張</strong>：23456 のように5枚並ぶと、1・4・7 で待てます（234＋56、23＋456）。<br>
+                  <strong>ノベタン</strong>：3456 の4枚だけなら、3 と 6 の単騎2つ（345＋6、3＋456）。<br>
+                  <strong>亜両面</strong>：3455 のように、両面と単騎が重なる形。<br>
+                  <strong>エントツ</strong>：55567 のように、刻子と両面が重なる形。</p>
+                  <p>コツは、<strong>手の中の同じ種類の牌を、2通り以上に分けてみる</strong>ことです。</p>`,
+              },
+              {
+                type: 'waits', sets: 2, tiles: ['m2', 'm3', 'm4', 'm5', 'm6', 'p1', 'p1'],
+                prompt: '<strong>3面張</strong>です。アガリ牌を全部選んでください。',
+                why: '23456萬は「234＋56」とも「23＋456」とも分けられるので、1・4・7萬の3種類で待てます。',
+              },
+              {
+                type: 'waits', sets: 2, tiles: ['m3', 'm4', 'm5', 'm6', 'p2', 'p3', 'p4'],
+                prompt: '<strong>ノベタン</strong>です。アガリ牌を全部選んでください。',
+                why: '3456萬は「345＋6」とも「3＋456」とも分けられます。残った1枚の単騎が、3萬と6萬の2つになります。',
+              },
+              {
+                type: 'waits', sets: 2, tiles: ['m3', 'm4', 'm5', 'm5', 'p2', 'p3', 'p4'],
+                prompt: '<strong>亜両面</strong>です。アガリ牌を全部選んでください。',
+                why: '3455萬は「345＋5（単騎）」とも「34（両面）＋55（雀頭）」とも分けられるので、2萬と5萬で待てます。',
+              },
+              {
+                type: 'waits', sets: 2, tiles: ['m5', 'm5', 'm5', 'm6', 'm7', 'p1', 'p1'],
+                prompt: '<strong>エントツ</strong>です。アガリ牌を全部選んでください。3種類あります。',
+                why: '「555＋67（両面）」なら5萬・8萬、「567＋55（双ポン）」なら5萬と1筒。合わせて5萬・8萬・1筒の3種類です。',
+              },
+              {
+                type: 'waits', sets: 4, tiles: ['m2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm8', 'p2', 'p3', 'p4', 's5', 's5', 's5'],
+                prompt: '13枚です。同じ種類が7枚並んでいます。アガリ牌を全部選んでください。',
+                why: '2345678萬は、どこを単騎として残すかで分け方が3通りあります（2・5・8萬）。7枚の連続形は「2・5・8」「3・6・9」のように3つ飛びで待つと覚えておくと早いです。',
+              },
+            ],
+          },
+          {
+            id: 'mahjong.pat-nanikiru', game: 'mahjong', title: '何切るの型',
+            desc: '迷ったときの4つの順番',
+            steps: [
+              {
+                type: 'teach', title: '何切るは、この順で考える',
+                body: `<p><strong>1. テンパイに取れるなら取る。</strong>待ちが悪くても、リーチで勝負できます。<br>
+                  <strong>2. テンパイまでの枚数（シャンテン数）を悪くしない。</strong>受け入れ枚数より先に見ます。<br>
+                  <strong>3. 孤立した牌から切る。</strong>字牌 → 1・9 → 2・8 → 3〜7 の順。<br>
+                  <strong>4. 悪い形から外す。</strong>辺張・嵌張より、両面を残します。</p>
+                  <p>この4つは上から順に優先します。下の問題も、この順で考えてみてください。</p>`,
+              },
+              {
+                type: 'discard', sets: 4,
+                tiles: ['m1', 'm2', 'm4', 'm5', 'm6', 'p2', 'p3', 'p4', 's4', 's5', 's6', 's8', 'z7', 'z7'],
+                prompt: '1枚切ってください。（型1：テンパイに取れるか）',
+                hint: '切るとテンパイになる牌が1枚だけあります。',
+                why: '8索を切ればテンパイ（1・2萬で3萬待ち）。待ちは悪くても、テンパイならリーチがかけられます。',
+              },
+              {
+                type: 'discard', sets: 4,
+                tiles: ['m2', 'm3', 'm4', 'm6', 'm7', 'p3', 'p4', 'p4', 'p5', 's2', 's3', 's4', 's8', 'z5'],
+                prompt: '1枚切ってください。（型2：シャンテン数を悪くしない）',
+                hint: '6萬や7萬を切ると受け入れ枚数は増えますが、テンパイまでの枚数が1つ増えます。',
+                why: '4筒・白・8索あたりが正解です。67萬の両面を崩すと、受け入れが多く見えても1歩遠ざかります。',
+              },
+              {
+                type: 'discard', sets: 4,
+                tiles: ['m3', 'm4', 'm5', 'm5', 'm6', 'p2', 'p3', 'p4', 'p8', 's6', 's7', 'z2', 'z2', 'z4'],
+                prompt: '1枚切ってください。（型3：孤立した牌から）',
+                hint: 'どの組にもつながっていない牌が2枚あります。',
+                why: '北か8筒。どちらも他の牌とつながっていない孤立牌です。組の一部を崩すより先に切ります。',
+              },
+              {
+                type: 'discard', sets: 4,
+                tiles: ['m1', 'm2', 'm3', 'm5', 'm7', 'p3', 'p4', 's5', 's6', 's7', 's8', 's9', 'z3', 'z3'], strict: true,
+                prompt: '1枚切ってください。（型4：悪い形から外す）',
+                hint: '嵌張（5萬と7萬）と両面（3筒と4筒）。残すならどちらでしょう。',
+                why: '5萬か7萬。嵌張は1種4枚しか受け入れませんが、両面は2種8枚。形の悪いほうから外します。',
+              },
+            ],
+          },
+          {
+            id: 'mahjong.pat-drill', game: 'mahjong', title: '形の総復習',
+            desc: '型の名前は伏せて出題',
+            steps: [
+              {
+                type: 'teach', title: '型を見抜く',
+                body: `<p>ここからは型の名前を伏せて出題します。待ちは「分け方を2通り以上試す」、
+                  何切るは「テンパイ → シャンテン数 → 孤立牌 → 悪い形」の順で考えてください。</p>`,
+              },
+              {
+                type: 'waits', sets: 2, tiles: ['s3', 's4', 's5', 's6', 's7', 'z1', 'z1'],
+                prompt: 'アガリ牌を全部選んでください。',
+                why: '34567索の3面張です（2・5・8索）。',
+              },
+              { type: 'discard', sets: 4, prompt: '1枚切ってください。' },
+              {
+                type: 'waits', sets: 2, tiles: ['p2', 'p2', 'p2', 'p3', 'p4', 'm7', 'm7'],
+                prompt: 'アガリ牌を全部選んでください。',
+                why: '「222＋34」なら2筒・5筒の両面、「234＋22」なら2筒と7萬の双ポン。合わせて2筒・5筒・7萬の3種類です（エントツ）。',
+              },
+              { type: 'discard', sets: 4, prompt: '1枚切ってください。' },
+              { type: 'waits', sets: 4, prompt: 'アガリ牌を全部選んでください。' },
+              {
+                type: 'waits', sets: 4, tiles: ['m1', 'm1', 'm1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm8', 'm9', 'm9', 'm9'],
+                prompt: 'おまけの難問です。アガリ牌を全部選んでください。',
+                why: '1112345678999萬は、1〜9萬のどれでもあがれる9面待ち（純正九蓮宝燈の形）。分け方を変えると、どの牌も組に収まります。',
+              },
+            ],
+          },
+        ],
+      },
+      {
+        title: '十　点数状況の押し引き',
+        lessons: [
+          {
+            id: 'mahjong.situation-push', game: 'mahjong', title: '点数状況で変わる押し引き',
+            desc: '同じ手でも、場面で答えが変わる',
+            steps: [
+              {
+                type: 'teach', title: '押すか降りるかを決める3つのもの',
+                body: `<p><strong>1. 自分の手の価値</strong>：テンパイか。待ちは良いか（両面か）。あがれば何点か。<br>
+                  <strong>2. 相手の怖さ</strong>：リーチか。親か（親に振り込むと1.5倍）。<br>
+                  <strong>3. 点数状況</strong>：いま何位か。残りの局数。あがると順位が変わるか。</p>
+                  <p>序盤は1と2だけで決めてかまいません。<strong>オーラス（最後の局）が近づくほど、3が大事</strong>になります。
+                  「あがっても順位が変わらない」「振り込んでも順位が変わらない」を先に確かめる習慣をつけましょう。</p>`,
+              },
+              {
+                type: 'quiz', prompt: '東1局。子がリーチ。あなたは両面待ちのテンパイで、あがれば満貫（8000点）です。危険な牌を引きました。',
+                choices: [
+                  { t: '押す（その牌を切ってリーチ・テンパイを続ける）' },
+                  { t: '降りる', why: '良い待ちの高い手は、振り込む危険より、あがったときの得が大きい場面です。序盤なら押すのが基本です。' },
+                  { t: 'テンパイを崩して、安全そうな牌を切る', why: '回し打ちは、良いテンパイを捨てるほどの場面ではありません。' },
+                ],
+                answer: 0,
+                why: '「良い待ち＋高い手＋序盤」は押す条件がそろっています。子のリーチなら、なおさらです。',
+              },
+              {
+                type: 'quiz', prompt: '東2局。親がリーチ。あなたは子で、テンパイまであと2枚（2シャンテン）、あがっても1000点の手です。',
+                choices: [
+                  { t: '降りる' },
+                  { t: '押す', why: '親に振り込むと点数が1.5倍。遠くて安い手で戦う理由がありません。' },
+                  { t: 'リーチ者の現物だけは避けて、あとは手を進める', why: '中途半端がいちばん損をします。遠い手なら、はっきり降ります。' },
+                ],
+                answer: 0,
+                why: '「遠い手・安い手・相手は親のリーチ」。3つとも降りを指しています。',
+              },
+              {
+                type: 'quiz', prompt: 'オーラス（最後の局）。あなたは子でトップ、2着とは12000点差。4着の子がリーチ。あなたはテンパイまであと1枚（1シャンテン）です。',
+                choices: [
+                  { t: '降りる' },
+                  { t: '押してあがりに行く', why: 'あがらなくても、振り込まなければトップのまま終われます。無理をする理由がありません。' },
+                  { t: 'リーチをかけ返す', why: 'まだテンパイしていないのでリーチはできません。それに、トップを守る場面です。' },
+                ],
+                answer: 0,
+                why: 'トップ目のオーラスは「振り込まないこと」が最優先。流局でも、相手のツモでも、トップは守れます。',
+              },
+              {
+                type: 'quiz', prompt: 'オーラス。あなたはラス（4位）で、3着とは3000点差。リーチはかかっていません。あなたは1000点の手でテンパイしました（役はあります）。',
+                choices: [
+                  { t: 'リーチをかけて点数を上げる' },
+                  { t: 'リーチせずに（ダマで）あがりを待つ', why: '1000点では、3着の人から直接あがっても差は2000点しか縮まらず、順位が変わりません。' },
+                  { t: '降りる', why: '誰もリーチしていません。ここで順位を上げるには、あがりに行くしかありません。' },
+                ],
+                answer: 0,
+                why: 'リーチで1翻増えれば2000点。3着の人から直接あがれば、差が4000点動いて逆転できます（出したリーチ棒も戻ってきます）。ダマの1000点では、どうあがっても届きません。オーラスは「あがって順位が変わるか」を先に計算します。',
+              },
+              {
+                type: 'quiz', prompt: '東3局。あなたが親。子がリーチ。あなたは両面待ちのテンパイで、あがれば2000点（親なので2900点）です。危険な牌を引きました。',
+                choices: [
+                  { t: '押す' },
+                  { t: '降りる', why: '親は、あがれば点数が1.5倍で、もう一度親を続けられます。良い待ちのテンパイなら押す価値があります。' },
+                ],
+                answer: 0,
+                why: '親のテンパイは、点数以上の価値（連荘）があります。良い待ちなら、子のリーチには押し返すのが基本です。',
+              },
+              {
+                type: 'quiz', prompt: '南4局（オーラス）。流局まで残りツモ1回。親がリーチ。あなたは子で、愚形（嵌張）の1000点テンパイ。危険な牌を引きました。手には現物もあります。',
+                choices: [
+                  { t: '現物を切って降りる' },
+                  { t: '押してテンパイを保つ', why: 'あがれる見込みは残り1回で、しかも1000点。親に振り込む損の方がずっと大きい場面です。' },
+                ],
+                answer: 0,
+                why: '最後の1回は、あがりの見込みも小さい。テンパイ料（最大3000点）より、親への放銃のほうが重いので、安い愚形なら降ります。',
               },
             ],
           },
