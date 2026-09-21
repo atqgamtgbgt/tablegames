@@ -1392,6 +1392,75 @@ const NS_MAHJONG = (() => {
     toitoi: { ja: '対々和', han: 2, desc: '4つの組が全部刻子（同じ牌3枚）。' },
     honitsu: { ja: '混一色', han: 3, naki: 2, desc: '1種類の数牌と字牌だけ。鳴くと2翻。' },
     chinitsu: { ja: '清一色', han: 6, naki: 5, desc: '1種類の数牌だけ。鳴くと5翻。' },
+    kokushi: { ja: '国士無双', han: 13, desc: '1・9・字牌13種類を1枚ずつ＋どれか1枚。役満。' },
+  };
+
+  /**
+   * 符を数える。tiles は手の中の牌（あがり牌を含む）、ctx.melds は鳴いた組（4枚ならカン）。
+   * 同じ手でも分け方・あがり牌の当てはめ方で符が変わるので、いちばん高いものを取る。
+   */
+  function calcFu(tiles, ctx = {}, yaku = []) {
+    const melds = ctx.melds || [];
+    const sets = 4 - melds.length;
+    const menzen = !melds.length;
+    if (yaku.includes('kokushi')) return 30;
+    if (yaku.includes('pinfu')) return ctx.tsumo ? 20 : 30;
+    const decs = decompose(tiles, sets);
+    if (!decs.length) return yaku.includes('chiitoi') ? 25 : 30;
+    const pairFu = (t) => (['z5', 'z6', 'z7'].includes(t) ? 2 : 0)
+      + (t === ctx.seatWind ? 2 : 0) + (t === ctx.roundWind ? 2 : 0);
+    let best = 0;
+    for (const d of decs) {
+      const places = [];
+      if (ctx.winTile && d.pair === ctx.winTile) places.push({ kind: 'pair' });
+      d.sets.forEach((s, i) => { if (ctx.winTile && s.includes(ctx.winTile)) places.push({ kind: 'set', i }); });
+      if (!places.length) places.push({ kind: 'none' });
+      for (const pl of places) {
+        let fu = 20;
+        if (menzen && !ctx.tsumo) fu += 10;          // 門前ロン
+        if (ctx.tsumo) fu += 2;                       // ツモ
+        d.sets.forEach((s, i) => {
+          if (s[0] !== s[1]) return;
+          // ロンで完成した刻子は明刻扱い
+          const open = !ctx.tsumo && pl.kind === 'set' && pl.i === i;
+          fu += (open ? 2 : 4) * (isYaochu(s[0]) ? 2 : 1);
+        });
+        for (const m of melds) {
+          if (m[0] !== m[1]) continue;
+          fu += (m.length === 4 ? 8 : 2) * (isYaochu(m[0]) ? 2 : 1);   // 明刻2/4・明槓8/16
+        }
+        fu += pairFu(d.pair);
+        if (pl.kind === 'pair') fu += 2;               // 単騎
+        else if (pl.kind === 'set') {
+          const s = d.sets[pl.i];
+          if (s[0] !== s[1]) {
+            const pos = s.indexOf(ctx.winTile), lo = Number(s[0][1]);
+            if (pos === 1 || (pos === 2 && lo === 1) || (pos === 0 && lo === 7)) fu += 2;   // 嵌張・辺張
+          }
+        }
+        if (!menzen && fu === 20) fu = 30;             // 鳴いた平和形は30符
+        best = Math.max(best, Math.ceil(fu / 10) * 10);
+      }
+    }
+    return best;
+  }
+
+  /** 基本点（符×2^(翻+2)。満貫以上は区切りの値） */
+  function basePoints(han, fu) {
+    if (han >= 13) return 8000;
+    if (han >= 11) return 6000;
+    if (han >= 8) return 4000;
+    if (han >= 6) return 3000;
+    const b = fu * 2 ** (han + 2);
+    return han >= 5 || b >= 2000 ? 2000 : b;
+  }
+  const up100 = (x) => Math.ceil(x / 100) * 100;
+  /** ロンの点数 */
+  const ronPoints = (han, fu, oya) => up100(basePoints(han, fu) * (oya ? 6 : 4));
+  /** ツモの支払い：{ fromOya, fromKo }（親のツモなら fromKo だけ） */
+  const tsumoPoints = (han, fu, oya) => {
+    const b = basePoints(han, fu);
+    return oya ? { fromKo: up100(b * 2) } : { fromOya: up100(b * 2), fromKo: up100(b) };
   };
 
   /** 役の翻数（鳴いていると下がる役がある） */
@@ -1450,6 +1519,8 @@ const NS_MAHJONG = (() => {
     // 染め手（牌の種類だけで決まる）
     const suits = new Set(all.filter((t) => !isHonor(t)).map((t) => t[0]));
     if (suits.size === 1) out.push(all.some(isHonor) ? 'honitsu' : 'chinitsu');
+    // 国士無双は役満。ほかの役とは複合させない
+    if (sets === 4 && isKokushi(tiles)) return ['kokushi'];
     return [...new Set(out)];
   }
 
@@ -1533,7 +1604,7 @@ const NS_MAHJONG = (() => {
     return null;
   }
 
-  return { SUITS, SUIT_JA, SUIT_YOMI, HONOR_JA, HONOR_YOMI, NUM_YOMI, ALL_TILES, toIndex, fromIndex, isHonor, isTerminal, isYaochu, tileName, tileYomi, toCounts, fromCounts, sortTiles, makeWall, decompose, isAgari, isChiitoi, isKokushi, isWin, waits, isTenpai, WAIT_TYPES, waitType, shanten, YAKU_JA, yakuHan, judgeYaku, countYakuhai, randomWinHand, randomTenpai };
+  return { SUITS, SUIT_JA, SUIT_YOMI, HONOR_JA, HONOR_YOMI, NUM_YOMI, ALL_TILES, toIndex, fromIndex, isHonor, isTerminal, isYaochu, tileName, tileYomi, toCounts, fromCounts, sortTiles, makeWall, decompose, isAgari, isChiitoi, isKokushi, isWin, waits, isTenpai, WAIT_TYPES, waitType, shanten, YAKU_JA, yakuHan, judgeYaku, countYakuhai, calcFu, basePoints, ronPoints, tsumoPoints, randomWinHand, randomTenpai };
 })();
 
 // ── js/games/mahjong4.js ────────────────────────────────────
@@ -1556,24 +1627,14 @@ const NS_MJ4 = (() => {
     handLimit: 0,     // 1人あたりの最大ツモ数。0 なら通常どおり70枚
   };
 
-  /** 翻数から点数を出す簡易表。符は使わない */
-  const BASE = [
-    [1, 1000, 1500], [2, 2000, 2900], [3, 3900, 5800], [4, 8000, 12000],
-    [5, 8000, 12000], [7, 12000, 18000], [10, 16000, 24000],
-    [12, 24000, 36000], [99, 32000, 48000],
-  ];
-  function scoreOf(han, isOya) {
-    const row = BASE.find((r) => han <= r[0]) || BASE[BASE.length - 1];
-    return isOya ? row[2] : row[1];
-  }
-  // 符を数えない簡易表なので、4翻は満貫として扱う（点数表と表示をそろえる）
-  function scoreLabel(han) {
+  /** 点数の呼び名。満貫未満は「翻・符」で表す（点数は M.ronPoints / M.tsumoPoints で計算） */
+  function scoreLabel(han, fu) {
     if (han >= 13) return '役満';
     if (han >= 11) return '三倍満';
     if (han >= 8) return '倍満';
     if (han >= 6) return '跳満';
-    if (han >= 4) return '満貫';
-    return `${han}翻`;
+    if (M.basePoints(han, fu) >= 2000) return '満貫';
+    return `${han}翻${fu}符`;
   }
 
   class Game {
@@ -1826,26 +1887,21 @@ const NS_MJ4 = (() => {
       const list = M.judgeYaku(hand, yctx);
       // 役牌は刻子の数だけ（連風牌は2翻）。それ以外は表の翻数
       let han = list.reduce((a, k) => a + (k === 'yakuhai' ? M.countYakuhai(hand, yctx) : M.yakuHan(k, menzen)), 0);
+      const fu = M.calcFu(hand, yctx, list);
       const extras = [];
       if (this.ippatsu[p] && this.riichi[p]) { han += 1; extras.push('一発'); }
       // hand は手の中の牌＋あがり牌。ロンのあがり牌も tsumo のツモ牌も hands[p] には入っていない
       const dora = this.doraCount(p, winTile);
       if (dora && han > 0) { han += dora; extras.push(`ドラ${dora}`); }
-      return { han, list, extras, dora };
+      return { han, fu, list, extras, dora };
     }
 
     tsumo(p = this.turn) {
       const y = this.yakuOf(p, this.drawn, true);
       if (!y.han) return null;
-      const total = scoreOf(y.han, this.isOya(p));
+      const t = M.tsumoPoints(y.han, y.fu, this.isOya(p));
       const pays = [0, 0, 0, 0];
-      if (this.isOya(p)) {
-        const each = Math.ceil(total / 3 / 100) * 100;
-        for (let i = 0; i < 4; i++) if (i !== p) pays[i] = each;
-      } else {
-        const unit = Math.ceil(total / 4 / 100) * 100;
-        for (let i = 0; i < 4; i++) if (i !== p) pays[i] = this.isOya(i) ? unit * 2 : unit;
-      }
+      for (let i = 0; i < 4; i++) if (i !== p) pays[i] = this.isOya(i) ? t.fromOya : t.fromKo;
       this.settle(p, pays, y, { tsumo: true, tile: this.drawn });
       return this.result;
     }
@@ -1853,7 +1909,7 @@ const NS_MJ4 = (() => {
     ron(p, tile = this.lastDiscard.tile) {
       const y = this.yakuOf(p, tile, false);
       if (!y.han) return null;
-      const total = scoreOf(y.han, this.isOya(p));
+      const total = M.ronPoints(y.han, y.fu, this.isOya(p));
       const pays = [0, 0, 0, 0];
       pays[this.lastDiscard.p] = total;
       this.settle(p, pays, y, { tsumo: false, tile, from: this.lastDiscard.p });
@@ -1877,7 +1933,7 @@ const NS_MJ4 = (() => {
         kind: 'win', winner, ...info, ...y,
         hand: info.tsumo ? this.fullHand(winner) : M.sortTiles([...this.hands[winner], info.tile]),
         melds: this.melds[winner],
-        gain, label: scoreLabel(y.han),
+        gain, label: scoreLabel(y.han, y.fu),
       };
     }
 
@@ -1922,7 +1978,7 @@ const NS_MJ4 = (() => {
     }
   }
 
-  return { SEAT_JA, SEAT_TILE, DEFAULT_RULE, scoreOf, scoreLabel, Game };
+  return { SEAT_JA, SEAT_TILE, DEFAULT_RULE, scoreLabel, Game };
 })();
 
 // ── js/core/audio.js ────────────────────────────────────────
@@ -4819,7 +4875,7 @@ const NS_PLAY4 = (() => {
         r.hand.map((t) => `<span class="tile">${tileFace(t)}</span>`).join('')}${meldHtml}</div>`;
       if (r.winner === ME) {
         sfx.finish();
-        ctx.solved(`<b>あがりました</b>${yaku}（${r.han}翻 ${r.label}）${r.gain.toLocaleString()}点${handHtml}`);
+        ctx.solved(`<b>あがりました</b>${yaku}（${r.han}翻${r.fu}符${M.basePoints(r.han, r.fu) >= 2000 ? ` ${r.label}` : ''}）${r.gain.toLocaleString()}点${handHtml}`);
         // 次の局も打てるようにしておく
         ctx.actions([
           { label: '次へ', variant: 'tone', onClick: () => ctx.advance() },
@@ -4828,7 +4884,7 @@ const NS_PLAY4 = (() => {
       } else {
         const dealIn = !r.tsumo && r.from === ME;
         ctx.say(`<b>${who}のあがり</b>${dealIn ? 'あなたの捨て牌に当たりました（放銃）。' : ''}`
-          + `${yaku}（${r.han}翻 ${r.label}）${handHtml}`, dealIn ? 'ng' : undefined);
+          + `${yaku}（${r.han}翻${r.fu}符${M.basePoints(r.han, r.fu) >= 2000 ? ` ${r.label}` : ''}）${handHtml}`, dealIn ? 'ng' : undefined);
         if (dealIn) ctx.miss();
         ctx.actions(others);
       }
@@ -5785,8 +5841,24 @@ const NS_LESSON = (() => {
     const hand = s.tiles
       ? M.sortTiles(s.tiles)
       : (() => {
-          const w = M.makeWall(s.honors === false ? M.ALL_TILES.filter((t) => !M.isHonor(t)) : M.ALL_TILES);
-          return M.sortTiles(w.slice(0, sets * 3 + 2));
+          const deal = () => {
+            const w = M.makeWall(s.honors === false ? M.ALL_TILES.filter((t) => !M.isHonor(t)) : M.ALL_TILES);
+            return M.sortTiles(w.slice(0, sets * 3 + 2));
+          };
+          if (!s.goodOnly) return deal();
+          // 良問だけ：テンパイに近く（2シャンテン以内）、最善がはっきりしている手を選ぶ
+          //   最善と同じシャンテン数の候補のうち、2番手より受け入れが4枚以上多い（または最善の牌が1種類だけ）
+          for (let k = 0; k < 300; k++) {
+            const h = deal();
+            const t = K.ukeire(h, sets);
+            if (!t.length || t[0].shanten > 2 || t[0].shanten < 0) continue;
+            const same = t.filter((r) => r.shanten === t[0].shanten);
+            const tops = same.filter((r) => r.tiles === same[0].tiles);
+            const next = same.find((r) => r.tiles < same[0].tiles);
+            if (tops.length > 2) continue;
+            if (!next || same[0].tiles - next.tiles >= 4) return h;
+          }
+          return deal();
         })();
 
     ctx.prompt(s.prompt || 'この手から<strong>1枚だけ</strong>切るとしたら、どれを切りますか。');
@@ -5987,7 +6059,9 @@ const NS_LESSON = (() => {
       }
       const mustCheck = s.mustCheck ?? (game === 'shogi');
       if (mustCheck && !checking()) {
-        return fail('王手が続いていません。詰将棋では毎手かならず王手をかけます。');
+        return fail(game === 'shogi'
+          ? '王手が続いていません。詰将棋では毎手かならず王手をかけます。'
+          : '王手が続いていません。この問題は、王手を続けて詰ませます。');
       }
       // ply は両者の手数。limit 手目（最後の自分の手）で詰んでいなければ失敗
       if (ply >= limit) return fail(`${limit}手では詰みませんでした。`);
@@ -6205,7 +6279,8 @@ const NS_LESSON = (() => {
       if (C.gameStatus(position, 'b', opts) === 'checkmate') return win('チェックメイトです');
       const left = total - n;
       // 相手の応手から先を読んで、最後にどれだけ得をしているか
-      const v = tacSearch(position, 'b', 1 + 2 * left, -1e9, 1e9, opts) - base;
+      // 読みの深さは3手まで（それ以上はスマホで数十秒かかる）。取り合いは静かな局面まで読む
+      const v = tacSearch(position, 'b', Math.min(3, 1 + 2 * left), -1e9, 1e9, opts) - base;
       if (v >= 900) {
         if (left === 0) return win('詰みが見えています');
       } else if (v < need) {
@@ -6220,7 +6295,7 @@ const NS_LESSON = (() => {
         // 相手は、こちらの得がいちばん小さくなる手を選ぶ
         let pick = null, bestV = Infinity;
         for (const mv of C.allLegalMoves(position, 'b', opts)) {
-          const v2 = tacSearch(C.applyMove(position, mv.from, mv.to, opts), 'w', 2 * left - 1, -1e9, 1e9, opts);
+          const v2 = tacSearch(C.applyMove(position, mv.from, mv.to, opts), 'w', Math.min(3, 2 * left - 1), -1e9, 1e9, opts);
           if (v2 < bestV) { bestV = v2; pick = mv; }
         }
         if (!pick) { busy = false; return; }
@@ -6581,6 +6656,10 @@ const NS_DCHESS = (() => {
     const all = [TAC.fork[0], TAC.skewer[1], TAC.pin[1], TAC.disc[1], TAC.fork[2], TAC.pin[0], TAC.disc[2], TAC.skewer[2]];
     return all.map((p, i) => tacStep(i % 2 ? mirrorTac(p) : p, true));
   }
+
+  // ── タクティクス自動ドリル用の問題集。型ごとに局面を自動で作り、
+  //    「その1手だけが2点以上の差をつけて駒得になる」ものだけをエンジンで選んで残した
+  const TAC_BANK = [["fork",{"b1":"K","f4":"k","c3":"q","f2":"P","g2":"P","h2":"P","a7":"p","c1":"N"},"c1e2"],["fork",{"e1":"K","f6":"k","b8":"q","f2":"P","g2":"P","h2":"P","a7":"p","b7":"p","f7":"p","g7":"p","f8":"N"},"f8d7"],["fork",{"e1":"K","e5":"k","d8":"q","h2":"P","a7":"p","f7":"p","g7":"p","h7":"p","e7":"N"},"e7c6"],["fork",{"c1":"K","h3":"k","h7":"r","f2":"P","a7":"p","b7":"p","f7":"p","e4":"N"},"e4g5"],["fork",{"c1":"K","e5":"k","f2":"r","b7":"p","g7":"p","h7":"p","b4":"N"},"b4d3"],["fork",{"c1":"K","e6":"k","h3":"r","h2":"P","a7":"p","f7":"p","g7":"p","e4":"N"},"e4g5"],["fork",{"c1":"K","e2":"k","g2":"q","f2":"P","b7":"p","f7":"p","h7":"p","d5":"N"},"d5f4"],["fork",{"h1":"K","c4":"k","f7":"r","f2":"P","d3":"N"},"d3e5"],["fork",{"g1":"K","d1":"k","c4":"r","f2":"P","g2":"P","h2":"P","b7":"p","f7":"p","g7":"p","a4":"N"},"a4b2"],["fork",{"b1":"K","b3":"k","e6":"r","f2":"P","g2":"P","h2":"P","h7":"p","c2":"N"},"c2d4"],["fork",{"c1":"K","b6":"k","a7":"q","f2":"P","g2":"P","h2":"P","d6":"N"},"d6c8"],["pin",{"g1":"K","c3":"k","d3":"q","h2":"P","f2":"P","g2":"P","b7":"p","h7":"p","g8":"R"},"g8g3"],["skewer",{"g1":"K","c5":"k","a3":"r","f2":"P","g2":"P","h2":"P","a7":"p","b7":"p","h7":"p","f6":"B"},"f6e7"],["disc",{"g1":"K","c7":"k","c3":"R","c5":"B","e7":"q","f2":"P","g2":"P","h2":"P"},"c5e7"],["disc",{"e1":"K","f6":"k","a1":"B","d4":"N","b5":"q","f2":"P","g2":"P","h2":"P","h7":"p"},"d4b5"],["disc",{"e1":"K","e8":"k","e3":"R","e6":"N","d8":"q","g2":"P","h2":"P","f7":"p","g7":"p"},"e6d8"],["disc",{"e1":"K","d3":"k","f3":"R","e3":"N","c2":"q","f2":"P","g2":"P","h2":"P","a7":"p","b7":"p"},"e3c2"],["pin",{"g1":"K","f4":"k","e4":"q","b3":"P","f2":"P","g2":"P","h2":"P","a7":"p","h7":"p","a2":"R"},"a2a4"],["pin",{"g1":"K","c2":"k","c3":"q","b4":"P","f2":"P","g2":"P","h2":"P","b7":"p","d5":"R"},"d5c5"],["pin",{"c1":"K","g6":"k","f5":"q","e2":"P","f2":"P","g2":"P","h2":"P","g7":"p","a6":"B"},"a6d3"],["skewer",{"e1":"K","c5":"k","c7":"q","h2":"P","a7":"p","b7":"p","f7":"p","h7":"p","d3":"R"},"d3c3"],["skewer",{"g1":"K","d3":"k","a3":"r","f2":"P","g2":"P","h2":"P","a7":"p","b7":"p","h5":"R"},"h5h3"],["skewer",{"h1":"K","e5":"k","b8":"r","g2":"P","g7":"p","h7":"p","g1":"B"},"g1h2"],["skewer",{"e1":"K","e4":"k","h4":"q","f2":"P","g2":"P","h2":"P","a7":"p","f1":"Q"},"f1c4"],["skewer",{"c1":"K","b7":"k","a8":"q","f2":"P","h2":"P","f7":"p","g7":"p","h7":"p","e2":"B"},"e2f3"],["skewer",{"g1":"K","e4":"k","b4":"q","g2":"P","h2":"P","a7":"p","g6":"R"},"g6g4"],["fork",{"g1":"K","f2":"P","g2":"P","h2":"P","d6":"k","a3":"r","b2":"N","h7":"p"},"b2c4"],["fork",{"g1":"K","f2":"P","g2":"P","h2":"P","g6":"k","d3":"q","c4":"N","c7":"p","h7":"p","g7":"p"},"c4e5"],["fork",{"g1":"K","f2":"P","g2":"P","h2":"P","c7":"k","g7":"r","f6":"N","b7":"p"},"f6e8"],["fork",{"g1":"K","f2":"P","g2":"P","h2":"P","f6":"k","e7":"q","h6":"N","a7":"p","h7":"p"},"h6g8"],["disc",{"g1":"K","f2":"P","g2":"P","h2":"P","f8":"k","f1":"R","f3":"N","d2":"q"},"f3d2"],["disc",{"g1":"K","f2":"P","g2":"P","h2":"P","d8":"k","d1":"R","d5":"N","b6":"q"},"d5b6"],["disc",{"g1":"K","f2":"P","g2":"P","h2":"P","d8":"k","d1":"R","d3":"N","e5":"q"},"d3e5"],["disc",{"g1":"K","f2":"P","g2":"P","h2":"P","f8":"k","f1":"R","f4":"N","d5":"r"},"f4d5"],["disc",{"g1":"K","f2":"P","g2":"P","h2":"P","d8":"k","d1":"R","d5":"N","b4":"q"},"d5b4"],["disc",{"g1":"K","f2":"P","g2":"P","h2":"P","c8":"k","c1":"R","c3":"N","a2":"q"},"c3a2"],["disc",{"g1":"K","f2":"P","g2":"P","h2":"P","c8":"k","c1":"R","c5":"N","b7":"q"},"c5b7"],["disc",{"g1":"K","f2":"P","g2":"P","h2":"P","d8":"k","d1":"R","d3":"N","b2":"r"},"d3b2"],["disc",{"g1":"K","f2":"P","g2":"P","h2":"P","c8":"k","c1":"R","c6":"N","d8":"q"},"c6d8"]];
 
   const chess = {
     id: 'chess',
@@ -7981,6 +8060,33 @@ const NS_DCHESS = (() => {
                 hint: 'c6のナイトと e8のキングが、斜めに並んでいます。ピンしてから、安い駒で攻めます。',
                 why: 'Bb5 でナイトをキングにピン。次に d5 で攻めると、ナイトは動けずに取られます。',
               },
+              {
+                type: 'teach', title: '長い組み合わせ：連続王手',
+                body: `<p>組み合わせが長くなっても、<strong>王手を続けている限り、相手の応手はほとんど決まっています</strong>。
+                  だから、王手の連続は長くても読みやすいのです。</p>
+                  <p>次は4手の組み合わせ。ナイトとクイーンだけで、有名な窒息詰めに持ち込みます。</p>`,
+              },
+              {
+                type: 'mateIn', moves: 7, side: 'w', coords: true, mustCheck: true,
+                board: { g1: 'K', c4: 'Q', e5: 'N', h8: 'k', e8: 'r', a7: 'p', g7: 'p', h7: 'p', f2: 'P', g2: 'P', h2: 'P' },
+                prompt: '王手を続けて、<strong>4手</strong>で詰ませてください。',
+                hint: 'ナイトの王手でキングを動かし、次は両王手。最後はクイーンを捨てて、黒のルークに g8 をふさがせます。',
+                why: 'Nf7+ Kg8、Nh6++ Kh8、Qg8+ Rxg8、Nf7#。窒息詰め（フィリドールの遺産）の全手順です。',
+              },
+              {
+                type: 'combo', side: 'w', moves: 3, gain: 4,
+                board: { g1: 'K', h3: 'R', g5: 'N', g8: 'k', d8: 'q', f7: 'p', g7: 'p', a7: 'p', f2: 'P', g2: 'P', a2: 'P' },
+                prompt: '<strong>3手</strong>の組み合わせで駒得してください（自分・相手・自分・相手・自分）。',
+                hint: 'ルークを捨てて、黒のキングを h8 へ呼び込みます。そのキングと d8のクイーンに、ナイトが同時に届くマスは？',
+                why: 'Rh8+! Kxh8、Nxf7+（キングとクイーンの両取り）、Nxd8。ルーク1枚でクイーンとポーンを取りました。',
+              },
+              {
+                type: 'combo', side: 'w', moves: 3, gain: 4,
+                board: { b1: 'K', a3: 'R', b5: 'N', b8: 'k', e8: 'q', c7: 'p', b7: 'p', h7: 'p', c2: 'P', b2: 'P', h2: 'P' },
+                prompt: '左右を入れ替えた形です。<strong>3手</strong>で駒得してください。',
+                hint: '同じ考え方です。まずルークで王手をかけて、キングを隅へ。',
+                why: 'Ra8+! Kxa8、Nxc7+、Nxe8。形が同じなら、同じ手順が通ります。',
+              },
             ],
           },
         ],
@@ -8092,6 +8198,7 @@ const NS_DCHESS = (() => {
         ],
       },
     ],
+    tacticsBank: TAC_BANK,
   };
 
   return { chess };
@@ -8178,6 +8285,22 @@ const NS_DSHOGI = (() => {
       '7手で詰ませてください。盤上の銀と、持ち駒の飛・銀を使います。',
       '4一の銀を動かして王手をかけるところから始めます。',
       '3二銀 2二玉 2三飛 1二玉 2一飛成 1三玉 2三竜まで。'],
+  ];
+
+  // ── 9手詰め：エンジンで「9手で詰み・7手以内では詰まない・初手は1つだけ」を確かめてある（解説の手順は一例）
+  const TSUME9 = [
+    [{ '11': 'k', '15': 'B', '22': 'l' }, { G: 2, N: 1 },
+      '9手で詰ませてください。持ち駒は金2枚と桂。',
+      '2二の香が邪魔で、玉は動ける場所が少なくなっています。まず桂で王手を。',
+      '2三桂 1二玉 1一金 2三玉（桂を取る） 2四金 3二玉 3三金 3一玉 4二金まで。1一金で玉を上へ追い出し、金2枚で追いかけました。'],
+    [{ '21': 'k', '12': 'L', '15': 'B' }, { G: 2, P: 1 },
+      '9手で詰ませてください。盤上の香と角、持ち駒の金2枚・歩を使います。',
+      '香を成って捨て、玉を1一へ呼び込みます。',
+      '1一香成 同玉 3三角成 2二香（合駒） 2一金 同玉 3二金 1二玉 2二馬まで。合駒の香を最後に馬で取って詰み。'],
+    [{ '12': 'k', '13': 's', '15': 'B' }, { G: 2, R: 1 },
+      '9手で詰ませてください。持ち駒は飛と金2枚。',
+      '飛車を離して横から王手。相手が駒を間に入れてきたら、取って持ち駒にします。',
+      '3二飛 2二銀（合駒） 同飛 同玉 3三銀（取った銀を打つ） 2三玉 2四金 1二玉 2二金まで。'],
   ];
 
   // ── 必至：王手でない1手目で、相手のどの応手にも1手詰めが残る（3手詰めはない）ことを確かめてある
@@ -9409,6 +9532,24 @@ const NS_DSHOGI = (() => {
               },
               ...TSUME7.map(([board, hand, prompt, hint, why]) => ({
                 type: 'mateIn', moves: 7, shape: BIG, coords: true,
+                state: { board: { ...board, '99': 'K' }, hands: { b: hand, w: {} }, turn: 'b' },
+                prompt, hint, why,
+              })),
+            ],
+          },
+          {
+            id: 'shogi.tsume9', game: 'shogi', title: '9手詰め',
+            desc: '合駒と捨て駒が入る長手順',
+            steps: [
+              {
+                type: 'teach', title: '9手詰めは「捨て駒で形を変える」',
+                body: `<p>9手詰めでは、途中で<strong>駒を捨てて玉の位置を変える</strong>手や、
+                  相手が<strong>合駒</strong>（間に駒を打って防ぐ）をしてくる変化がよく出ます。</p>
+                  <p>合駒をされたら、その駒を取れないかを考えます。取った駒はそのまま自分の持ち駒になり、次の王手に使えます。</p>
+                  <p>相手は、いちばん長く逃げられる手を選んできます。</p>`,
+              },
+              ...TSUME9.map(([board, hand, prompt, hint, why]) => ({
+                type: 'mateIn', moves: 9, shape: BIG, coords: true,
                 state: { board: { ...board, '99': 'K' }, hands: { b: hand, w: {} }, turn: 'b' },
                 prompt, hint, why,
               })),
@@ -10908,6 +11049,58 @@ const NS_DMAHJONG = (() => {
             ],
           },
           {
+            id: 'mahjong.nanikiru-dojo', game: 'mahjong', title: '何切る道場',
+            desc: '答えがはっきりした良問だけを8問',
+            steps: [
+              {
+                type: 'teach', title: '毎回ちがう手が配られます',
+                body: `<p>ここでは、テンパイに近くて<strong>最善の1枚がはっきりしている手</strong>だけを選んで出します。</p>
+                  <p>考える順番は「テンパイに取れるか → テンパイまでの枚数を悪くしないか → 孤立牌 → 悪い形」。
+                  正解すると、切った牌ごとの受け入れ表が出ます。</p>`,
+              },
+              ...Array.from({ length: 8 }, () => ({ type: 'discard', sets: 4, goodOnly: true, strict: true })),
+            ],
+          },
+          {
+            id: 'mahjong.fu', game: 'mahjong', title: '符の数え方',
+            desc: '点数が変わる「手の形の点」',
+            steps: [
+              {
+                type: 'teach', title: '符は「20符＋足し算」',
+                body: `<p>符は、次の足し算で数えて、最後に<strong>10の位へ切り上げ</strong>ます。</p>
+                  <p><strong>基本</strong>：20符。鳴かずにロンなら＋10符、ツモなら＋2符。<br>
+                  <strong>刻子</strong>（同じ牌3枚）：2〜8の牌は、手の中で作れば4符・ポンなら2符。1・9・字牌はその倍（8符・4符）。
+                  ロンで完成した刻子はポンと同じ扱い。<br>
+                  <strong>雀頭</strong>：役牌（白發中・自風・場風）なら＋2符。<br>
+                  <strong>待ち</strong>：嵌張・辺張・単騎なら＋2符（両面・双ポンは0）。</p>
+                  <p>例外が2つ。<strong>平和のツモは20符、ロンは30符</strong>ちょうど。<strong>七対子は25符</strong>で固定です。</p>`,
+              },
+              {
+                type: 'quiz', prompt: '鳴かずに、この手を8萬のロンであがりました（平和・タンヤオ）。何符ですか。',
+                tiles: ['m2', 'm3', 'm4', 'm6', 'm7', 'm8', 'p5', 'p6', 'p7', 's3', 's4', 's5', 'p2', 'p2'],
+                choices: [{ t: '30符' }, { t: '20符', why: '20符は平和のツモのときです。ロンなら30符。' }, { t: '40符', why: '刻子も役牌の雀頭もないので、足すものがありません。' }],
+                answer: 0, why: '平和のロンは30符ちょうど（20符＋門前ロン10符）。',
+              },
+              {
+                type: 'quiz', prompt: 'この七対子をあがりました。何符ですか。',
+                tiles: ['m1', 'm1', 'm3', 'm3', 'p5', 'p5', 'p7', 'p7', 's2', 's2', 's9', 's9', 'z1', 'z1'],
+                choices: [{ t: '25符' }, { t: '30符', why: '七対子は切り上げをせず、25符で固定です。' }, { t: '20符', why: '20符は平和のツモです。' }],
+                answer: 0, why: '七対子は25符。2翻25符の子のロンは1600点です。',
+              },
+              {
+                type: 'quiz', prompt: 'リーチをかけて、この手を5筒のロンであがりました（嵌張待ち）。何符ですか。',
+                tiles: ['m1', 'm1', 'm1', 'p4', 'p5', 'p6', 's3', 's4', 's5', 's6', 's7', 's8', 'z2', 'z2'],
+                choices: [{ t: '40符' }, { t: '30符', why: '1萬の暗刻（8符）と嵌張（2符）を足し忘れていませんか。' }, { t: '50符', why: '20＋10＋8＋2＝40符。南の雀頭は、自風・場風でなければ0符です。' }],
+                answer: 0, why: '20符＋門前ロン10符＋1萬の暗刻8符＋嵌張2符＝40符。',
+              },
+              {
+                type: 'quiz', prompt: '子が1翻40符でロンしました。何点ですか。',
+                choices: [{ t: '1300点' }, { t: '1000点', why: '30符1翻の点数です。' }, { t: '2600点', why: '40符2翻の点数です。' }],
+                answer: 0, why: '40符×2の(1+2)乗＝320、それを4倍して100点単位に切り上げると1300点です。',
+              },
+            ],
+          },
+          {
             id: 'mahjong.score', game: 'mahjong', title: '点数の目安',
             desc: 'よく出る点数を覚える',
             steps: [
@@ -10921,7 +11114,7 @@ const NS_DMAHJONG = (() => {
                   <p>親はおよそ<strong>1.5倍</strong>（30符2翻なら2900点）。</p>
                   <p>5翻からは符に関係なく決まります。<strong>満貫</strong> 子8000・親12000、<strong>跳満</strong>（6〜7翻）子12000・親18000、
                   <strong>倍満</strong>（8〜10翻）子16000・親24000、<strong>三倍満</strong>（11〜12翻）子24000・親36000、<strong>役満</strong> 子32000・親48000。</p>
-                  <p>4翻は30符なら7700点（子）ですが、このアプリの4人打ちでは、符を数えない簡単な表で満貫（8000点）として扱っています。</p>`,
+                  <p>4翻は30符なら7700点（子）、40符以上なら満貫です。このアプリの4人打ちも、符を数えてこの表どおりに点数を出しています。</p>`,
               },
               {
                 type: 'quiz', prompt: '子が30符3翻でロンしました。何点ですか。',
@@ -11062,7 +11255,22 @@ const NS_APP = await (async () => {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   }
+  const TAC_NAME = { fork: '両取り（フォーク）', pin: 'ピン', skewer: '串刺し（スキュア）', disc: 'ディスカバード' };
   function syntheticLesson(g, kind) {
+    if (kind === '_tactics') {
+      const a = [...(g.tacticsBank || [])];
+      for (let k = a.length - 1; k > 0; k--) { const j = (Math.random() * (k + 1)) | 0; [a[k], a[j]] = [a[j], a[k]]; }
+      return {
+        id: `${g.id}._tactics`, game: g.id, title: 'タクティクス自動ドリル（10問）',
+        steps: a.slice(0, 10).map(([type, board, ans]) => ({
+          type: 'bestmove', side: 'w', board,
+          answers: [{ from: ans.slice(0, 2), to: ans.slice(2) }],
+          prompt: '駒得する手を見つけてください。型は伏せてあります。',
+          hint: 'まず王手、次に守られていない駒、最後にキングと同じ線に並んだ駒を探します。',
+          why: `型は<strong>${TAC_NAME[type] || type}</strong>でした。`,
+        })),
+      };
+    }
     const pool = problemPool(g);
     let picks;
     if (kind === '_daily') {
@@ -11106,6 +11314,9 @@ const NS_APP = await (async () => {
       };
       row('☀', '今日の1問', '毎日1問。全レッスンの中から出ます', doneToday ? '済' : '', `#/${g.id}/_daily`);
       row('✎', '実力テスト', '全範囲からランダムに10問。型の名前は出ません', '', `#/${g.id}/_test`);
+      if (g.tacticsBank?.length) {
+        row('⚔', 'タクティクス自動ドリル', `自動で作った${g.tacticsBank.length}問から、毎回ランダムに10問`, '', `#/${g.id}/_tactics`);
+      }
       // 苦手：一発正解の割合が低い、修了済みのレッスン
       const weak = lessons
         .map((l) => ({ l, r: store.state.lessons[l.id] }))
@@ -11169,7 +11380,7 @@ const NS_APP = await (async () => {
   function viewLesson(gameId, lessonId, mode = '') {
     const g = GAMES[gameId];
     const lessons = flat(g);
-    const synthetic = lessonId === '_daily' || lessonId === '_test';
+    const synthetic = lessonId === '_daily' || lessonId === '_test' || lessonId === '_tactics';
     const idx = synthetic ? -1 : lessons.findIndex((l) => l.id === lessonId);
     const lesson = synthetic ? syntheticLesson(g, lessonId) : lessons[idx];
     if (!lesson) { location.hash = `#/${gameId}`; return el('div'); }
@@ -11188,7 +11399,7 @@ const NS_APP = await (async () => {
     new LessonRunner(lesson, host, {
       only,
       // 実力テストは記録しない（毎回ちがう問題なので）。今日の1問は連続日数に数える
-      transient: lessonId === '_test',
+      transient: lessonId === '_test' || lessonId === '_tactics',
       onFinish: ({ correct, total, review }) => {
         const next = review || synthetic ? null : lessons[idx + 1];
         const stage = el('div', 'stage');
