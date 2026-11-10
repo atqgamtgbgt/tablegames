@@ -747,3 +747,9 @@ button, a, .tile, .choice { touch-action: manipulation; }
 .pboard{display:block;height:7px;border-radius:99px;background:var(--line);overflow:hidden;margin:.2rem 0 .85rem}
 .pboard__fill{display:block;height:100%;background:var(--tone);border-radius:inherit}
 @media(max-width:40rem){.training__steps{grid-template-columns:1fr}.training__step{padding:.65rem .8rem}}
+
+/* 学習時間の切り替え */
+.training__duration{display:flex;align-items:center;justify-content:flex-end;gap:.65rem;margin:.25rem 0 .75rem}
+.training__durationLabel{color:var(--chalk-dim);font-size:.85rem}
+.training__select{font:inherit;font-size:.9rem;color:var(--chalk);background:var(--ink-3);border:1px solid var(--line);border-radius:var(--r-sm);padding:.2rem .55rem;min-width:5rem}
+.training__select:focus-visible{outline:2px solid var(--tone);outline-offset:2px}
