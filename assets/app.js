@@ -1715,9 +1715,11 @@ const NS_APP = (async () => {
 
   // 静的ファイルをオフラインでも読めるようにする。初回表示は妨げない。
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
-    window.addEventListener('load', () => {
+    const registerOffline = () => {
       navigator.serviceWorker.register('./sw.js').catch(() => { /* 未対応環境はオンラインで使う */ });
-    });
+    };
+    if (document.readyState === 'complete') registerOffline();
+    else window.addEventListener('load', registerOffline, { once: true });
   }
 
   return {};

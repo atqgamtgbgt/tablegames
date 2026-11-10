@@ -1,8 +1,8 @@
 /* 盤戯のオフラインキャッシュ。GitHub Pagesのサブパスでも動く。 */
-const CACHE = 'bangi-assets-v3';
+const CACHE = 'bangi-assets-v4';
 const precache = [
-  './', './index.html', './assets/style.css?v=3',
-  './assets/core.js?v=3', './assets/curriculum.js?v=3', './assets/app.js?v=3',
+  './', './index.html', './assets/style.css?v=4',
+  './assets/core.js?v=4', './assets/curriculum.js?v=4', './assets/app.js?v=4',
   './manifest.webmanifest', './assets/apple-touch-icon.png'
 ];
 
