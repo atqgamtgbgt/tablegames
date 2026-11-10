@@ -1,4 +1,4 @@
-name: Smoke test
+name: Smoke and browser tests
 on:
   push:
     branches: [main]
@@ -12,3 +12,18 @@ jobs:
         with:
           node-version: '22'
       - run: node tests/smoke.mjs
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --no-save @playwright/test@1.56.1
+      - run: npx playwright install --with-deps chromium
+      - name: Check four game screens
+        run: |
+          python3 -m http.server 8765 --bind 127.0.0.1 >/tmp/tablegames-http.log 2>&1 &
+          sleep 2
+          npx playwright test tests/browser.spec.cjs --workers=1 --reporter=line
