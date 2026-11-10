@@ -1,1 +1,29 @@
-# tablegames
+# 盤戯のはじめかた
+
+チェス・将棋・囲碁・麻雀を盤や牌を動かしながら学ぶ日本語Webアプリです。
+
+## 今回の改善
+
+- 各種目のページに **「今日の15分・上達メニュー」** を設置。既存の復習期限、対局での悪手、苦手の傾向、未修了レッスンから3つの行動を提案します。
+- 「4週間の強化コース」と、競技別の信頼できる外部教材（Lichess、日本将棋連盟、81道場、日本棋院、OGS、Riichi Book 1 など）へのリンクを追加。教材内容の転載はありません。
+- `index.html` からCSS・JS・PWAマニフェスト・アイコンを分離し、巨大な埋め込みWebフォントを削除。端末の日本語フォントで表示し、外部アセットをブラウザでキャッシュできます。
+- ホームの進捗表示を、多数の子要素から単一のプログレスバーへ変更しました。
+
+**使い方:** GitHub Pagesなどの静的ホストでフォルダ一式を公開してください。今回の構成は1ファイル版ではないので、`index.html` だけをダウンロードしても動作しません。`file://`からの直接起動もブラウザのモジュール制約で動かない場合があります。ログインや外部APIキーは不要です。
+
+コーチは学習用の評価エンジンであり、プロによる指導や公式の段級位認定ではありません。もとの対局・教材・復習・棋譜/牌譜取り込み・保存機能は`assets/app.js`に残しています。
+
+## 検証
+
+```sh
+node tests/smoke.mjs
+```
+
+構文・主要機能・アセットのスモークテストです。より深い問題の検算はブラウザで`?selftest`を開くか「設定 → 自己診断」を実行してください。自動テストは盤上の正しさの完全な証明ではありません。
+
+## 教材と指導の参考
+
+- チェス [Lichessの練習](https://lichess.org/ja/practice)
+- 将棋 [日本将棋連盟オンラインスクール](https://www.shogi.or.jp/school/oss.html) / [81道場](https://81dojo.com/jp/)
+- 囲碁 [日本棋院入門](https://www.nihonkiin.or.jp/teach/lesson/school/) / [Online Go Server](https://online-go.com/puzzles)
+- 麻雀 [Riichi Book 1](https://repo.riichi.moe/books/rb1.html) / [牌効率トレーナー](https://euophrys.itch.io/mahjong-efficiency-trainer)
